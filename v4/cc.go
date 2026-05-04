@@ -430,16 +430,29 @@ func (c *Config) AdjustLongDouble() error {
 }
 
 func fixArgs(args *[]string, msg string) (r bool) {
-	tag := "unknown argument"
+	tags := []string{
+		"unknown argument",
+		"unrecognized command-line option",
+	}
 	a := strings.Split(strings.TrimSpace(msg), "\n")
-	var m map[string]struct{}
+	var (
+		m      map[string]struct{}
+		x      int
+		lenTag int
+	)
 	for _, v := range a {
-		x := strings.Index(v, tag)
+		for _, tag := range tags {
+			lenTag = len(tag)
+			x = strings.Index(v, tag)
+			if x >= 0 {
+				break
+			}
+		}
 		if x < 0 {
 			continue
 		}
 
-		v = v[x+len(tag):]
+		v = v[x+lenTag:]
 		v = strings.TrimPrefix(v, ":")
 		v = strings.TrimSpace(v)
 		if !strings.HasPrefix(v, "'") {
