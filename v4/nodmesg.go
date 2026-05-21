@@ -9,6 +9,5 @@ package cc // import "modernc.org/cc/v4"
 
 const Dmesgs = false
 
-// Dmesg does nothing. To enable use -tags=cc.dmesg. Cannot be enabled on
-// Windows.
+// Dmesg does nothing. To enable use -tags=cc.dmesg.
 func Dmesg(s string, args ...interface{}) {}

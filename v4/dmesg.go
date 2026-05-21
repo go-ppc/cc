@@ -42,7 +42,7 @@ func init() {
 }
 
 // Dmesg synchronously appends a debug message to DmesgsFile. To disable do not
-// use -tags=cc.dmesg. Cannot be enabled on Windows.
+// use -tags=cc.dmesg.
 func Dmesg(s string, args ...interface{}) {
 	if s == "" {
 		s = strings.Repeat("%v ", len(args))
