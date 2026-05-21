@@ -485,6 +485,27 @@ func fixArgs(args *[]string, msg string) (r bool) {
 	return true
 }
 
+// lookPath wraps exec.LookPath and additionally handles MSYS / git-bash style
+// /<drive>/... paths on Windows by translating them to <drive>:\... before
+// retrying. On failure it returns the original exec.LookPath error so callers
+// can decide what to do next.
+func lookPath(s string) (path string, err error) {
+	if path, err = exec.LookPath(s); err == nil {
+		return path, nil
+	}
+
+	if runtime.GOOS == "windows" && len(s) >= 4 && s[0] == '/' && s[2] == '/' {
+		if c := s[1]; c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
+			win := string(c) + `:\` + filepath.FromSlash(s[3:])
+			if p, e := exec.LookPath(win); e == nil {
+				return p, nil
+			}
+		}
+	}
+
+	return "", err
+}
+
 func newConfig(opts []string) (cc, predefined string, includePaths, sysIncludePaths []string, keywords map[string]rune, err error) {
 	if Dmesgs {
 		Dmesg("newConfig(%v)", opts)
@@ -548,21 +569,34 @@ func newConfig(opts []string) (cc, predefined string, includePaths, sysIncludePa
 
 	opts = args[:len(args):len(args)]
 	for _, cc = range []string{os.Getenv("CC"), "cc", "gcc"} {
+		if Dmesgs {
+			Dmesg("trying cc candidate: %q", cc)
+		}
 		if cc == "" {
 			continue
 		}
 
-		cc, err = exec.LookPath(cc)
+		orig := cc
+		cc, err = lookPath(orig)
 		if err != nil {
+			if Dmesgs {
+				Dmesg("lookPath(%q) FAIL: %v", orig, err)
+			}
 			continue
 		}
 
+		if Dmesgs {
+			Dmesg("lookPath: %q -> %q", orig, cc)
+		}
 	again:
 		args := append(opts, "-dM", "-E", "-")
 		cmd := exec.Command(cc, args...)
 		cmd.Env = append(os.Environ(), "LC_ALL=C")
 		pre, err := cmd.CombinedOutput()
 		if err != nil {
+			if Dmesgs {
+				Dmesg("cpp probe %q FAIL: %v", cc, err)
+			}
 			if fixArgs(&opts, string(pre)) {
 				goto again
 			}
