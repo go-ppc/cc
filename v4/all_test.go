@@ -2388,6 +2388,86 @@ func TestBitfieldByteOrder(t *testing.T) {
 	}
 }
 
+// TestUnionBitfieldByteOrder is the union counterpart of TestBitfieldByteOrder:
+// a bit field declared directly in a union starts at offset 0 and, on a
+// big-endian target, is allocated from the most significant bit of its access
+// unit (bits2AccessBytes(ValueBits) bytes) rather than the least significant
+// one. Access-unit widths of 1, 2, 4 and 8 bytes are all exercised.
+func TestUnionBitfieldByteOrder(t *testing.T) {
+	const src = `union U {
+	unsigned a:1;
+	unsigned b:12;
+	unsigned c:20;
+	unsigned long long e:40;
+} v;`
+	type field struct {
+		name       string
+		offsetBits int
+		mask       uint64
+	}
+	for _, tc := range []struct {
+		arch   string
+		fields []field
+	}{
+		{"s390x", []field{ // big-endian: fields sit at the top of their access unit
+			{"a", 7, 0x80},
+			{"b", 4, 0xfff0},
+			{"c", 12, 0xfffff000},
+			{"e", 24, 0xffffffffff000000},
+		}},
+		{"amd64", []field{ // little-endian: fields sit at the bottom
+			{"a", 0, 0x1},
+			{"b", 0, 0xfff},
+			{"c", 0, 0xfffff},
+			{"e", 0, 0xffffffffff},
+		}},
+	} {
+		cfg, err := NewConfig("linux", tc.arch, LongDouble64Flag("linux", tc.arch))
+		if err != nil {
+			t.Fatalf("%s: NewConfig: %v", tc.arch, err)
+		}
+
+		ast, err := Translate(cfg, []Source{
+			{Name: "<predefined>", Value: cfg.Predefined},
+			{Name: "<builtin>", Value: Builtin},
+			{Name: "test.c", Value: src},
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.arch, err)
+		}
+
+		s := ast.Scope.Nodes["v"]
+		if len(s) == 0 {
+			t.Fatalf("%s: v not declared", tc.arch)
+		}
+		d, ok := s[0].(*Declarator)
+		if !ok {
+			t.Fatalf("%s: v is %T, want *Declarator", tc.arch, s[0])
+		}
+		u, ok := d.Type().(*UnionType)
+		if !ok {
+			t.Fatalf("%s: v has type %T, want *UnionType", tc.arch, d.Type())
+		}
+
+		for _, w := range tc.fields {
+			f := u.FieldByName(w.name)
+			if f == nil {
+				t.Errorf("%s: field %s not found", tc.arch, w.name)
+				continue
+			}
+			if g, e := f.Offset(), int64(0); g != e {
+				t.Errorf("%s: %s.Offset() = %d, want %d", tc.arch, w.name, g, e)
+			}
+			if g, e := f.OffsetBits(), w.offsetBits; g != e {
+				t.Errorf("%s: %s.OffsetBits() = %d, want %d", tc.arch, w.name, g, e)
+			}
+			if g, e := f.Mask(), w.mask; g != e {
+				t.Errorf("%s: %s.Mask() = %#x, want %#x", tc.arch, w.name, g, e)
+			}
+		}
+	}
+}
+
 // https://gitlab.com/cznic/cc/-/issues/146
 func TestIssue146(t *testing.T) {
 	const src = `enum foo {

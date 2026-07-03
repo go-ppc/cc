@@ -3209,6 +3209,14 @@ func (n *StructDeclarationList) checkUnion(c *ctx, a *fieldAllocator, s []*Field
 			f.accessBytes = bits2AccessBytes(f.ValueBits())
 			f.groupSize = int(f.accessBytes)
 			a.brkBytes = mathutil.MaxInt64(a.brkBytes, int64(f.groupSize))
+			if a.bigEndian && f.valueBits != 0 {
+				// A union bit field starts at offset 0; on big-endian targets
+				// it is allocated from the most significant bit of its access
+				// unit, the mirror image of the little-endian, least-
+				// significant-bit placement set above.
+				f.offsetBits = int(f.accessBytes)*8 - int(f.valueBits)
+				f.mask = a.mask(int(f.valueBits)) << f.offsetBits
+			}
 		default:
 			f.accessBytes = t.Size()
 			f.groupSize = int(t.Size())
