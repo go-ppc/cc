@@ -746,6 +746,9 @@ type ABI struct {
 	SignedChar bool
 }
 
+// isBigEndian reports whether the ABI's byte order is big-endian.
+func (a *ABI) isBigEndian() bool { return a.ByteOrder == binary.BigEndian }
+
 type AbiType struct {
 	Size       int64
 	Align      int

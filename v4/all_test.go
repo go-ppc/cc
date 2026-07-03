@@ -2286,6 +2286,108 @@ func TestABI(t *testing.T) {
 	}
 }
 
+// TestBitfieldByteOrder pins the storage layout of bit fields, which is
+// endianness dependent: little-endian ABIs allocate a storage unit's bit fields
+// starting from the least significant bit, big-endian ABIs from the most
+// significant bit. The regression case is GMP's 'union ieee_double_extract',
+// which overlays a bit field struct on a double; getting the big-endian
+// (s390x) layout wrong silently produced garbage doubles in mpz/mpq/mpf
+// _get_d/_set_d. Each target below declares the union the way GMP does for that
+// endianness, so both must yield the same physical IEEE-754 double layout:
+// sig at bit 63, exp at bits 52..62, mantissa in bits 0..51.
+func TestBitfieldByteOrder(t *testing.T) {
+	type field struct {
+		name       string
+		offset     int64 // Field.Offset(), bytes from the start of the storage
+		offsetBits int   // Field.OffsetBits(), bit position within the access unit
+		mask       uint64
+	}
+	for _, tc := range []struct {
+		arch   string
+		src    string
+		fields []field
+	}{
+		{ // big-endian: GMP declares the fields most-significant first
+			arch: "s390x",
+			src: `union ieee_double_extract {
+	struct { unsigned sig:1; unsigned exp:11; unsigned manh:20; unsigned manl:32; } s;
+	double d;
+} v;`,
+			fields: []field{
+				{"sig", 0, 31, 0x80000000},
+				{"exp", 0, 20, 0x7ff00000},
+				{"manh", 0, 0, 0x000fffff},
+				{"manl", 4, 0, 0xffffffff},
+			},
+		},
+		{ // little-endian: GMP declares the fields least-significant first
+			arch: "amd64",
+			src: `union ieee_double_extract {
+	struct { unsigned manl:32; unsigned manh:20; unsigned exp:11; unsigned sig:1; } s;
+	double d;
+} v;`,
+			fields: []field{
+				{"manl", 0, 0, 0xffffffff},
+				{"manh", 4, 0, 0x000fffff},
+				{"exp", 4, 20, 0x7ff00000},
+				{"sig", 4, 31, 0x80000000},
+			},
+		},
+	} {
+		cfg, err := NewConfig("linux", tc.arch, LongDouble64Flag("linux", tc.arch))
+		if err != nil {
+			t.Fatalf("%s: NewConfig: %v", tc.arch, err)
+		}
+
+		ast, err := Translate(cfg, []Source{
+			{Name: "<predefined>", Value: cfg.Predefined},
+			{Name: "<builtin>", Value: Builtin},
+			{Name: "test.c", Value: tc.src},
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.arch, err)
+		}
+
+		s := ast.Scope.Nodes["v"]
+		if len(s) == 0 {
+			t.Fatalf("%s: v not declared", tc.arch)
+		}
+		d, ok := s[0].(*Declarator)
+		if !ok {
+			t.Fatalf("%s: v is %T, want *Declarator", tc.arch, s[0])
+		}
+		u, ok := d.Type().(*UnionType)
+		if !ok {
+			t.Fatalf("%s: v has type %T, want *UnionType", tc.arch, d.Type())
+		}
+		sf := u.FieldByName("s")
+		if sf == nil {
+			t.Fatalf("%s: union field s not found", tc.arch)
+		}
+		st, ok := sf.Type().(*StructType)
+		if !ok {
+			t.Fatalf("%s: s has type %T, want *StructType", tc.arch, sf.Type())
+		}
+
+		for _, w := range tc.fields {
+			f := st.FieldByName(w.name)
+			if f == nil {
+				t.Errorf("%s: field %s not found", tc.arch, w.name)
+				continue
+			}
+			if g, e := f.Offset(), w.offset; g != e {
+				t.Errorf("%s: %s.Offset() = %d, want %d", tc.arch, w.name, g, e)
+			}
+			if g, e := f.OffsetBits(), w.offsetBits; g != e {
+				t.Errorf("%s: %s.OffsetBits() = %d, want %d", tc.arch, w.name, g, e)
+			}
+			if g, e := f.Mask(), w.mask; g != e {
+				t.Errorf("%s: %s.Mask() = %#x, want %#x", tc.arch, w.name, g, e)
+			}
+		}
+	}
+}
+
 // https://gitlab.com/cznic/cc/-/issues/146
 func TestIssue146(t *testing.T) {
 	const src = `enum foo {

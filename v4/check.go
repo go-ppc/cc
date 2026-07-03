@@ -3153,7 +3153,7 @@ func (n *StructDeclarationList) check(c *ctx, s *StructOrUnionSpecifier, isVolat
 		// trc("fld %q.%d at %p, set parent type %s", f.Name(), f.Index(), f, s.Type())
 		f.parentType = s.Type()
 	}
-	a := &fieldAllocator{align: 1, fields: fields, list: n}
+	a := &fieldAllocator{align: 1, fields: fields, list: n, bigEndian: c.ast.ABI.isBigEndian()}
 	switch x := s.typ.(type) {
 	case *StructType:
 		if len(fields) == 0 {
@@ -3225,6 +3225,7 @@ type fieldAllocator struct {
 	group     []*Field
 	groupSize int64
 	list      *StructDeclarationList
+	bigEndian bool
 }
 
 func (a *fieldAllocator) close() {
@@ -3312,6 +3313,15 @@ func (a *fieldAllocator) closeGroup() {
 		f.offsetBytes = a.brkBytes
 		f.groupSize = int(groupSize)
 		f.outerGroupOffsetBytes = a.brkBytes
+		if a.bigEndian {
+			// The allocation above packs bitfields starting from the least
+			// significant bit of the storage unit, which matches the ABI only
+			// on little-endian targets. On big-endian targets the ABI packs
+			// from the most significant bit, so mirror each field's position
+			// within the now-known groupSize-byte storage unit.
+			f.offsetBits = int(groupSize)*8 - f.offsetBits - int(f.valueBits)
+			f.mask = a.mask(int(f.valueBits)) << f.offsetBits
+		}
 	}
 	a.brkBytes += groupSize
 	a.group = a.group[:0]
