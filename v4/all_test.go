@@ -2468,6 +2468,68 @@ func TestUnionBitfieldByteOrder(t *testing.T) {
 	}
 }
 
+// TestFixArgs verifies that newConfig strips a flag the host compiler rejects,
+// across the diagnostic wordings GCC and clang use. The 'unsupported option'
+// form is what darwin/arm64 and openbsd/arm64 clang emit for -mlong-double-64,
+// a flag TestBitfieldByteOrder passes when cross-configuring linux/s390x; not
+// recognizing it made newConfig fail with "cannot determine C compiler
+// configuration".
+func TestFixArgs(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		msg  string
+		want []string
+		ok   bool
+	}{
+		{
+			name: "gcc unrecognized",
+			args: []string{"-mlong-double-64", "-E"},
+			msg:  "gcc: error: unrecognized command-line option '-mlong-double-64'",
+			want: []string{"-E"},
+			ok:   true,
+		},
+		{
+			name: "clang unknown argument",
+			args: []string{"-mlong-double-64", "-E"},
+			msg:  "clang: error: unknown argument: '-mlong-double-64'",
+			want: []string{"-E"},
+			ok:   true,
+		},
+		{
+			name: "clang unsupported for target (darwin/arm64)",
+			args: []string{"-mlong-double-64", "-E"},
+			msg:  "clang: error: unsupported option '-mlong-double-64' for target 'arm64-apple-macosx26.0.0'",
+			want: []string{"-E"},
+			ok:   true,
+		},
+		{
+			name: "clang unsupported for target (openbsd/arm64)",
+			args: []string{"-mlong-double-64", "-E"},
+			msg:  "cc: error: unsupported option '-mlong-double-64' for target 'aarch64-unknown-openbsd7.3'",
+			want: []string{"-E"},
+			ok:   true,
+		},
+		{
+			name: "unrelated error keeps args",
+			args: []string{"-mlong-double-64", "-E"},
+			msg:  "cc: error: no input files",
+			want: []string{"-mlong-double-64", "-E"},
+			ok:   false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string(nil), tc.args...)
+			if g, e := fixArgs(&args, tc.msg), tc.ok; g != e {
+				t.Errorf("fixArgs returned %v, want %v", g, e)
+			}
+			if g, e := args, tc.want; !reflect.DeepEqual(g, e) {
+				t.Errorf("args = %q, want %q", g, e)
+			}
+		})
+	}
+}
+
 // https://gitlab.com/cznic/cc/-/issues/146
 func TestIssue146(t *testing.T) {
 	const src = `enum foo {

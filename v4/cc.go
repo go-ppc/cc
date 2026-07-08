@@ -433,6 +433,10 @@ func fixArgs(args *[]string, msg string) (r bool) {
 	tags := []string{
 		"unknown argument",
 		"unrecognized command-line option",
+		// clang rejecting a flag that is valid in general but not for the
+		// current target, e.g. darwin/arm64 and openbsd/arm64 emit
+		// "unsupported option '-mlong-double-64' for target '...'".
+		"unsupported option",
 	}
 	a := strings.Split(strings.TrimSpace(msg), "\n")
 	var (
