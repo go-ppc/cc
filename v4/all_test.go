@@ -2469,11 +2469,13 @@ func TestUnionBitfieldByteOrder(t *testing.T) {
 }
 
 // TestFixArgs verifies that newConfig strips a flag the host compiler rejects,
-// across the diagnostic wordings GCC and clang use. The 'unsupported option'
-// form is what darwin/arm64 and openbsd/arm64 clang emit for -mlong-double-64,
-// a flag TestBitfieldByteOrder passes when cross-configuring linux/s390x; not
-// recognizing it made newConfig fail with "cannot determine C compiler
-// configuration".
+// regardless of how the compiler phrases the rejection. The regression:
+// TestBitfieldByteOrder cross-configures linux/s390x by passing -mlong-double-64
+// to the host compiler; on arm64 hosts (darwin/arm64, windows/arm64,
+// openbsd/arm64) clang rejects it as "unsupported option '...' for target
+// '...'", a wording fixArgs did not recognize, so newConfig failed with "cannot
+// determine C compiler configuration". Rather than enumerate every wording,
+// fixArgs now strips any flag it passed that the diagnostic quotes.
 func TestFixArgs(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -2507,6 +2509,24 @@ func TestFixArgs(t *testing.T) {
 			name: "clang unsupported for target (openbsd/arm64)",
 			args: []string{"-mlong-double-64", "-E"},
 			msg:  "cc: error: unsupported option '-mlong-double-64' for target 'aarch64-unknown-openbsd7.3'",
+			want: []string{"-E"},
+			ok:   true,
+		},
+		{
+			// Insurance for windows/arm64 and any future host: an unknown
+			// wording still gets fixed as long as the flag is quoted.
+			name: "novel wording, flag still quoted",
+			args: []string{"-mlong-double-64", "-E"},
+			msg:  "cc1: sorry, unimplemented: '-mlong-double-64' is not available for this target",
+			want: []string{"-E"},
+			ok:   true,
+		},
+		{
+			// GCC quotes with U+2018/U+2019; the old straight-quote extraction
+			// silently missed these.
+			name: "gcc curly quotes",
+			args: []string{"-mlong-double-64", "-E"},
+			msg:  "gcc: error: unrecognized command-line option ‘-mlong-double-64’",
 			want: []string{"-E"},
 			ok:   true,
 		},

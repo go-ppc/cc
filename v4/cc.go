@@ -433,10 +433,6 @@ func fixArgs(args *[]string, msg string) (r bool) {
 	tags := []string{
 		"unknown argument",
 		"unrecognized command-line option",
-		// clang rejecting a flag that is valid in general but not for the
-		// current target, e.g. darwin/arm64 and openbsd/arm64 emit
-		// "unsupported option '-mlong-double-64' for target '...'".
-		"unsupported option",
 	}
 	a := strings.Split(strings.TrimSpace(msg), "\n")
 	var (
@@ -466,6 +462,21 @@ func fixArgs(args *[]string, msg string) (r bool) {
 		v = v[1:]
 		if x = strings.Index(v, "'"); x > 0 {
 			v = v[:x]
+			if m == nil {
+				m = map[string]struct{}{}
+			}
+			m[v] = struct{}{}
+		}
+	}
+
+	// Catch-all for wordings the tags above miss. Compilers quote the offending
+	// flag no matter how they phrase the rejection, e.g. clang on arm64 hosts
+	// (darwin/arm64, windows/arm64, openbsd/arm64) says "unsupported option
+	// '-mlong-double-64' for target '...'". If the failing diagnostic quotes a
+	// flag we actually passed, drop it. Compilers delimit it with straight
+	// ('...') or, for GCC, curly (‘...’) quotes.
+	for _, v := range *args {
+		if strings.Contains(msg, "'"+v+"'") || strings.Contains(msg, "‘"+v+"’") {
 			if m == nil {
 				m = map[string]struct{}{}
 			}
