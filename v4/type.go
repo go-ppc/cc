@@ -50,6 +50,7 @@ var (
 	}
 
 	realFloatingPointKinds = [maxKind]bool{
+		BFloat16:   true,
 		Decimal128: true,
 		Decimal32:  true,
 		Decimal64:  true,
@@ -132,6 +133,7 @@ const (
 	InvalidKind Kind = iota
 
 	Array             // array
+	BFloat16          // __bf16
 	Bool              // _Bool
 	Char              // char
 	ComplexChar       // _Complex char

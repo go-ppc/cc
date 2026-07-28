@@ -3521,3 +3521,78 @@ enum g7 : char {h7};
 		t.Fatalf("parse error: %v", err)
 	}
 }
+
+// __bf16 is clang's/GCC's bfloat16 type. Apple clang's <emmintrin.h> typedefs
+// it, so failing to recognize it made every SSE2-using translation unit
+// unparseable on darwin/amd64.
+func TestBFloat16(t *testing.T) {
+	for _, tc := range []struct {
+		goos, goarch string
+		src          string
+		size         int64
+		align        int
+	}{
+		{"darwin", "amd64", "__bf16 x;", 2, 2},
+		{"darwin", "arm64", "__bf16 x;", 2, 2},
+		// The <emmintrin.h> form that motivated the support.
+		{"darwin", "amd64", "typedef __bf16 __v8bf __attribute__((__vector_size__(16), __aligned__(16)));\n__v8bf x;", 16, 16},
+	} {
+		cfg, err := NewConfig(tc.goos, tc.goarch, LongDouble64Flag(tc.goos, tc.goarch))
+		if err != nil {
+			t.Fatalf("%s/%s: %v", tc.goos, tc.goarch, err)
+		}
+
+		ast, err := Translate(cfg, []Source{
+			{Name: "<predefined>", Value: cfg.Predefined},
+			{Name: "<builtin>", Value: Builtin},
+			{Name: "t.c", Value: tc.src},
+		})
+		if err != nil {
+			t.Errorf("%s/%s: %q: %v", tc.goos, tc.goarch, tc.src, err)
+			continue
+		}
+
+		nodes := ast.Scope.Nodes["x"]
+		if len(nodes) == 0 {
+			t.Errorf("%s/%s: %q: x not declared", tc.goos, tc.goarch, tc.src)
+			continue
+		}
+
+		d, ok := nodes[0].(*Declarator)
+		if !ok {
+			t.Errorf("%s/%s: %q: got %T, expected *Declarator", tc.goos, tc.goarch, tc.src, nodes[0])
+			continue
+		}
+
+		typ := d.Type()
+		if g, e := typ.Kind(), BFloat16; g != e {
+			t.Errorf("%s/%s: %q: kind %v, expected %v", tc.goos, tc.goarch, tc.src, g, e)
+		}
+		if g, e := typ.Size(), tc.size; g != e {
+			t.Errorf("%s/%s: %q: size %v, expected %v", tc.goos, tc.goarch, tc.src, g, e)
+		}
+		if g, e := typ.Align(), tc.align; g != e {
+			t.Errorf("%s/%s: %q: align %v, expected %v", tc.goos, tc.goarch, tc.src, g, e)
+		}
+	}
+}
+
+// A target without __bf16 in its ABI table must report that cleanly instead of
+// failing to parse, same as _Float16 does.
+func TestBFloat16Unsupported(t *testing.T) {
+	cfg, err := NewConfig("linux", "amd64", LongDouble64Flag("linux", "amd64"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	switch _, err = Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "t.c", Value: "__bf16 x;"},
+	}); {
+	case err == nil:
+		t.Fatal("unexpected success")
+	case !strings.Contains(err.Error(), "__bf16 not supported on linux/amd64"):
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

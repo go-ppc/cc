@@ -4949,6 +4949,7 @@ const (
 	TypeSpecifierLong
 	TypeSpecifierFloat
 	TypeSpecifierFloat16
+	TypeSpecifierBFloat16
 	TypeSpecifierDecimal32
 	TypeSpecifierDecimal64
 	TypeSpecifierDecimal128
@@ -4993,6 +4994,8 @@ func (n TypeSpecifierCase) String() string {
 		return "TypeSpecifierFloat"
 	case TypeSpecifierFloat16:
 		return "TypeSpecifierFloat16"
+	case TypeSpecifierBFloat16:
+		return "TypeSpecifierBFloat16"
 	case TypeSpecifierDecimal32:
 		return "TypeSpecifierDecimal32"
 	case TypeSpecifierDecimal64:
@@ -5052,6 +5055,7 @@ func (n TypeSpecifierCase) String() string {
 //	|       "long"                           // Case TypeSpecifierLong
 //	|       "float"                          // Case TypeSpecifierFloat
 //	|       "_Float16"                       // Case TypeSpecifierFloat16
+//	|       "__bf16"                         // Case TypeSpecifierBFloat16
 //	|       "_Decimal32"                     // Case TypeSpecifierDecimal32
 //	|       "_Decimal64"                     // Case TypeSpecifierDecimal64
 //	|       "_Decimal128"                    // Case TypeSpecifierDecimal128
@@ -5096,15 +5100,15 @@ func (n *TypeSpecifier) Position() (r token.Position) {
 	}
 
 	switch n.Case {
-	case 25:
+	case 26:
 		return n.AtomicTypeSpecifier.Position()
-	case 21:
+	case 22:
 		return n.EnumSpecifier.Position()
-	case 20:
+	case 21:
 		return n.StructOrUnionSpecifier.Position()
-	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 22, 26, 27, 28, 29:
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 23, 27, 28, 29, 30:
 		return n.Token.Position()
-	case 23:
+	case 24:
 		if p := n.Token.Position(); p.IsValid() {
 			return p
 		}
@@ -5118,7 +5122,7 @@ func (n *TypeSpecifier) Position() (r token.Position) {
 		}
 
 		return n.Token3.Position()
-	case 24:
+	case 25:
 		if p := n.Token.Position(); p.IsValid() {
 			return p
 		}

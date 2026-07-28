@@ -36,6 +36,7 @@ package cc // import "modernc.org/cc/v4"
 	ATTRIBUTE		"__attribute__"
 	AUTO			"auto"
 	AUTOTYPE		"__auto_type"
+	BF16			"__bf16"
 	BOOL			"_Bool"
 	BREAK			"break"
 	BUILTINCHOOSEXPR	"__builtin_choose_expr"
@@ -527,6 +528,8 @@ package cc // import "modernc.org/cc/v4"
 /*yy:case Float      */ |	"float"
 			/*yy:example _Float16 i; */
 /*yy:case Float16    */ |	"_Float16"
+			/*yy:example __bf16 i; */
+/*yy:case BFloat16   */ |	"__bf16"
 			/*yy:example _Decimal32 i; */
 /*yy:case Decimal32  */ |	"_Decimal32"
 			/*yy:example _Decimal64 i; */

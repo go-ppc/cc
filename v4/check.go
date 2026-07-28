@@ -114,6 +114,7 @@ func newCtx(ast *AST, cfg *Config) *ctx {
 		ts2String([]TypeSpecifierCase{TypeSpecifierComplex, TypeSpecifierShort}):                                      c.newPredefinedType(ComplexShort),
 		ts2String([]TypeSpecifierCase{TypeSpecifierComplex, TypeSpecifierUnsigned}):                                   c.newPredefinedType(ComplexUInt),
 		ts2String([]TypeSpecifierCase{TypeSpecifierComplex}):                                                          complexdouble,
+		ts2String([]TypeSpecifierCase{TypeSpecifierBFloat16}):                                                         c.newPredefinedType(BFloat16),
 		ts2String([]TypeSpecifierCase{TypeSpecifierDecimal128}):                                                       c.newPredefinedType(Decimal128),
 		ts2String([]TypeSpecifierCase{TypeSpecifierDecimal32}):                                                        c.newPredefinedType(Decimal32),
 		ts2String([]TypeSpecifierCase{TypeSpecifierDecimal64}):                                                        c.newPredefinedType(Decimal64),
@@ -2849,6 +2850,8 @@ func (n *TypeSpecifier) check(c *ctx, isAtomic *bool, isVolatile, isConst bool) 
 	case TypeSpecifierFloat: // "float"
 		// ok
 	case TypeSpecifierFloat16: // "_Float16"
+		// ok
+	case TypeSpecifierBFloat16: // "__bf16"
 		// ok
 	case TypeSpecifierDecimal128: // "_Decimal128"
 		// ok

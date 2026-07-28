@@ -295,6 +295,7 @@ var (
 			UShort:     {2, 2, 2},
 			Void:       {1, 1, 1},
 			Float16:    {2, 2, 2},
+			BFloat16:   {2, 2, 2},
 		},
 		{"darwin", "arm64"}: {
 			Bool:       {1, 1, 1},
@@ -318,6 +319,7 @@ var (
 			UShort:     {2, 2, 2},
 			Void:       {1, 1, 1},
 			Float16:    {2, 2, 2},
+			BFloat16:   {2, 2, 2},
 		},
 		// gcc (SUSE Linux) 7.5.0
 		{"linux", "s390x"}: {
@@ -689,6 +691,7 @@ var (
 			Int128:         {16, 16, 16},
 			UInt128:        {16, 16, 16},
 			Float16:        {2, 2, 2},
+			BFloat16:       {2, 2, 2},
 			Float32:        {4, 4, 4},
 			Float32x:       {8, 8, 8},
 			Float64:        {8, 8, 8},

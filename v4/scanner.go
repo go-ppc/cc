@@ -50,6 +50,7 @@ const (
 	ATTRIBUTE         // '__attribute__'
 	AUTO              // 'auto'
 	AUTOTYPE          // '__auto_type'
+	BF16              // '__bf16'
 	BOOL              // '_Bool'
 	BREAK             // 'break'
 	CASE              // 'case'

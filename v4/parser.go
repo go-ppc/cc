@@ -77,6 +77,7 @@ var defaultKeywords = map[string]rune{
 	"__attribute":   rune(ATTRIBUTE),
 	"__attribute__": rune(ATTRIBUTE),
 	"__auto_type":   rune(AUTOTYPE),
+	"__bf16":        rune(BF16),
 	"__complex":     rune(COMPLEX),
 	"__complex__":   rune(COMPLEX),
 	"__const":       rune(CONST),
@@ -3149,6 +3150,7 @@ func (p *parser) isStorageClassSpecifier(ch rune) bool {
 //		_Float16
 //		_Float32
 //		_Float64
+//		__bf16
 //		__float80
 //		__fp16
 //		__m256d
@@ -3206,6 +3208,8 @@ func (p *parser) typeSpecifier() *TypeSpecifier {
 		return &TypeSpecifier{Case: TypeSpecifierImaginary, Token: p.shift(false)}
 	case rune(FLOAT16):
 		return &TypeSpecifier{Case: TypeSpecifierFloat16, Token: p.shift(false)}
+	case rune(BF16):
+		return &TypeSpecifier{Case: TypeSpecifierBFloat16, Token: p.shift(false)}
 	case rune(FLOAT32):
 		return &TypeSpecifier{Case: TypeSpecifierFloat32, Token: p.shift(false)}
 	case rune(FLOAT32X):
@@ -3251,6 +3255,7 @@ func (p *parser) typeSpecifier() *TypeSpecifier {
 func (p *parser) isTypeSpecifier(ch rune, typenameOk bool) bool {
 	switch ch {
 	case
+		rune(BF16),
 		rune(BOOL),
 		rune(CHAR),
 		rune(COMPLEX),
