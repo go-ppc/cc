@@ -721,7 +721,9 @@ type Config struct {
 	DefaultPtrdiffT Kind
 	DefaultWcharT   Kind
 
-	// EvalAllMacros enables attempt to assign a value to all object-like, constant macros.
+	// EvalAllMacros enables attempt to assign a value to all object-like,
+	// constant macros. The macro-expanded replacement list is evaluated as a C
+	// expression in the file scope of the translation unit.
 	EvalAllMacros bool
 	// Header disables type checking of function bodies.
 	Header bool
@@ -848,50 +850,128 @@ func Parse(cfg *Config, sources []Source) (*AST, error) {
 	return ast, err
 }
 
-func parse(cfg *Config, sources []Source) (*cpp, *AST, error) {
+func parse(cfg *Config, sources []Source) (*parser, *AST, error) {
 	p, err := newParser(cfg, newFset(), sources)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	ast, err := p.parse()
-	return p.cpp, ast, err
+	return p, ast, err
 }
 
 // Translate preprocesses, parses and type checks a translation unit,
 // consisting of inputs in sources.
 func Translate(cfg *Config, sources []Source) (*AST, error) {
-	cpp, ast, err := parse(cfg, sources)
+	p, ast, err := parse(cfg, sources)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := ast.check(cfg); err != nil {
+	c, err := ast.check(cfg)
+	if err != nil {
 		return nil, err
 	}
 
+	defer func() { c.cfg = nil }()
+
 	if cfg.EvalAllMacros {
-		cpp.eh = func(msg string, args ...interface{}) {}
-		for _, v := range cpp.macros {
-			if l := v.ReplacementList(); !v.IsFnLike && v.IsConst && len(l) != 0 && (v.Value() == nil || v.Value() == Unknown) {
-				switch x := cpp.eval(l).(type) {
-				case nil:
-					// nop
-				case int32:
-					v.val = Int64Value(x)
-				case int64:
-					v.val = Int64Value(x)
-				case uint32:
-					v.val = UInt64Value(x)
-				case uint64:
-					v.val = UInt64Value(x)
-				case string:
-					v.val = StringValue(x)
-				}
-			}
-		}
+		evalAllMacros(p, ast, c)
 	}
 	return ast, nil
+}
+
+// evalAllMacros implements Config.EvalAllMacros: it attempts to assign a value
+// to every object-like, constant macro that does not have one yet.
+//
+// The replacement list is macro-expanded and then parsed and type checked as a
+// C expression in the file scope of the translation unit, so that sizeof,
+// casts, enumeration constants, typedef names etc. have their C meaning. A
+// macro whose expansion is not a constant expression gets no value.
+//
+// Earlier versions used the preprocessor's #if evaluator for this. It knows
+// nothing about declarations and treats every identifier, sizeof included, as
+// zero, so 'sizeof(T)*N' came out as 0, '(N-8)/sizeof(T)' as N-8 and a
+// floating point expression as 0.
+func evalAllMacros(p *parser, ast *AST, c *ctx) {
+	cpp := p.cpp
+	cpp.eh = func(msg string, args ...interface{}) {}
+	for _, m := range cpp.macros {
+		l := m.ReplacementList()
+		if m.IsFnLike || !m.IsConst || len(l) == 0 || m.Value() != Unknown {
+			continue
+		}
+
+		var w cppTokens
+		s := cppTokens(tokens2CppTokens(l, false))
+		cpp.expand(false, false, &s, &w)
+		var b strings.Builder
+		for _, t := range w {
+			switch t.Ch {
+			case ' ', '\n', eof:
+				continue
+			}
+			b.Write(t.Src())
+			b.WriteByte(' ')
+		}
+		if b.Len() == 0 {
+			continue
+		}
+
+		if val, typ, ok := evalMacroExpression(p, ast, c, m.Name.SrcStr(), b.String()); ok {
+			m.val, m.typ = val, typ
+		}
+	}
+}
+
+// evalMacroExpression parses src, the macro-expanded replacement list of the
+// macro name, as a C expression in the file scope of ast and type checks it.
+// It returns the expression's value and type if the value is a known integer,
+// floating point or string constant.
+func evalMacroExpression(p *parser, ast *AST, c *ctx, name, src string) (val Value, typ Type, ok bool) {
+	n := len(c.errors)
+	defer func() {
+		if e := recover(); e != nil {
+			c.errors = c.errors[:n]
+			val, typ, ok = nil, nil, false
+		}
+	}()
+
+	// The expression parser expects a delimiter after an expression, never EOF.
+	sub, err := newParser(c.cfg, newFset(), []Source{{Name: "<macro " + name + ">", Value: src + ";\n"}})
+	if err != nil {
+		return nil, nil, false
+	}
+
+	failed := false
+	sub.cpp.eh = func(string, ...interface{}) { failed = true }
+	// Anything the parse declares, like a struct tag it does not find, lands
+	// in a throwaway child of the file scope; the file scope itself is left
+	// alone. Names are visible as of the end of the translation unit.
+	sub.scope = &Scope{Parent: ast.Scope}
+	sub.seq = p.seq
+	sub.cpp.rune()
+	e := sub.expression(false)
+	if failed || e == nil || sub.rune(false) != ';' {
+		return nil, nil, false
+	}
+
+	if sub.shift(false); failed || sub.rune(false) != eof {
+		return nil, nil, false
+	}
+
+	typ = e.check(c, decay)
+	if len(c.errors) != n {
+		c.errors = c.errors[:n]
+		return nil, nil, false
+	}
+
+	switch x := e.Value().(type) {
+	case Int64Value, UInt64Value, Float64Value, StringValue:
+		return x, typ, true
+	}
+
+	return nil, nil, false
 }
 
 // NodeTokens returns the source tokens n consists of.

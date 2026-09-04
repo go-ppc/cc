@@ -654,12 +654,12 @@ type AST struct {
 	predefinedDeclarator0 *Declarator // `int __predefined_declarator`
 }
 
-func (n *AST) check(cfg *Config) error {
+// check type checks n. The returned context, valid until its cfg field is
+// cleared by the caller, can check further expressions against n.
+func (n *AST) check(cfg *Config) (*ctx, error) {
 	n.Structs = map[*StructType]struct{}{}
 	n.Unions = map[*UnionType]struct{}{}
 	c := newCtx(n, cfg)
-
-	defer func() { c.cfg = nil }()
 
 	for l := n.TranslationUnit; l != nil; l = l.TranslationUnit {
 		l.ExternalDeclaration.check(c)
@@ -684,7 +684,7 @@ func (n *AST) check(cfg *Config) error {
 			prev = l
 		}
 	}
-	return c.errors.err()
+	return c, c.errors.err()
 }
 
 // ExternalDeclaration:

@@ -3596,3 +3596,101 @@ func TestBFloat16Unsupported(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// With EvalAllMacros, an object-like macro whose expansion contained sizeof, a
+// cast, an enumeration constant or any other identifier that is not a macro
+// was evaluated by the preprocessor's #if evaluator, which treats identifiers
+// as 0, so 'sizeof(T)*N' became 0 and '(N-8)/sizeof(T)' N-8; ccgo then emitted
+// const WALINDEX_PGSZ = 0 for SQLite. Found by hazyhaar (cznic/sqlite#221,
+// https://gitlab.com/cznic/libsqlite3/-/merge_requests/4).
+func TestEvalAllMacros(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.EvalAllMacros = true
+	ast, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "macros.c", Value: `
+typedef unsigned char u8;
+typedef unsigned short u16;
+typedef unsigned int u32;
+typedef u16 ht_slot;
+
+typedef struct WalIndexHdr {
+	u32 iVersion;
+	u32 unused;
+	u32 iChange;
+	u8  isInit;
+	u8  big_endian;
+	u16 szPage;
+	u32 mxFrame;
+	u32 nPage;
+	u32 aFrameCksum[2];
+	u32 aSalt[2];
+	u32 aCksum[2];
+} WalIndexHdr;
+
+struct RowSetEntry { u32 v; u32 a; u32 b; };
+
+enum { E5 = 5 };
+int f(int);
+
+#define HASHTABLE_NPAGE      4096
+#define HASHTABLE_NSLOT      8192
+#define WALINDEX_HDR_SIZE    ((sizeof(WalIndexHdr) + 7) & ~7)
+#define WALINDEX_PGSZ        (sizeof(ht_slot)*HASHTABLE_NSLOT + HASHTABLE_NPAGE*sizeof(u32))
+#define HASHTABLE_NPAGE_ONE  (HASHTABLE_NPAGE - (WALINDEX_HDR_SIZE/sizeof(u32)))
+#define ROWSET_ENTRY_PER_CHUNK ((1024-8)/sizeof(struct RowSetEntry))
+#define EXPR_FULLSIZE        sizeof(WalIndexHdr)
+#define BMS                  ((int)(sizeof(u32)*8))
+#define EPLUS                (E5 + 1)
+#define LIT                  (1 + 2)
+#define NEG                  (-1)
+#define CH                   'a'
+#define FLT                  1.5
+#define FLTX                 (1.5 * 2)
+#define STR                  "a" "b"
+#define UNDECLARED           (nosuch + 1)
+#define CALL                 f(1)
+#define TYPE                 unsigned int
+#define SELF                 SELF
+#define EMPTY
+`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		want Value
+	}{
+		{"WALINDEX_HDR_SIZE", UInt64Value(48)},
+		{"WALINDEX_PGSZ", UInt64Value(32768)},
+		{"HASHTABLE_NPAGE_ONE", UInt64Value(4084)},
+		{"ROWSET_ENTRY_PER_CHUNK", UInt64Value(84)},
+		{"EXPR_FULLSIZE", UInt64Value(48)},
+		{"BMS", Int64Value(32)},
+		{"EPLUS", Int64Value(6)},
+		{"LIT", Int64Value(3)},
+		{"NEG", Int64Value(-1)},
+		{"CH", Int64Value('a')},
+		{"FLT", Float64Value(1.5)},
+		{"FLTX", Unknown}, // floating point arithmetic is not folded
+		{"STR", StringValue("ab\x00")},
+		{"UNDECLARED", Unknown},
+		{"CALL", Unknown},
+		{"TYPE", Unknown},
+		{"SELF", Unknown},
+		{"EMPTY", Unknown},
+	} {
+		m := ast.Macros[tc.name]
+		if m == nil {
+			t.Errorf("%s: macro not found", tc.name)
+			continue
+		}
+
+		if g, e := m.Value(), tc.want; g != e {
+			t.Errorf("%s: got %v (%T), want %v (%T)", tc.name, g, g, e, e)
+		}
+	}
+}
