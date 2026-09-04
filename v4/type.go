@@ -1137,6 +1137,7 @@ type structType struct {
 
 	align         int
 	padding       int
+	isComplete    bool // Memoized isIncompleteInner() == false, see (*StructType).isIncompleteInner.
 	isIncomplete0 bool
 	isUnion       bool
 }
@@ -1503,6 +1504,16 @@ func (n *StructType) isIncompleteInner(m map[Type]struct{}) (r bool) {
 		return true
 	}
 
+	// Completeness is monotonic: once a struct type is complete it stays
+	// complete, so a negative result can be memoized. Without the memo every
+	// check of a struct nested k levels deep recurses k levels, which is
+	// quadratic in the nesting depth overall and, for pathological inputs like
+	// gcc.c-torture/compile/limits-structnest.c (10,000 levels), dominates the
+	// whole translation.
+	if n.isComplete {
+		return false
+	}
+
 	if _, ok := m[n]; ok {
 		return true
 	}
@@ -1514,11 +1525,20 @@ func (n *StructType) isIncompleteInner(m map[Type]struct{}) (r bool) {
 
 	defer func() { delete(m, n) }()
 
-	if n.forward != nil {
-		return n.forward.Type().isIncompleteInner(m)
+	switch {
+	case n.forward != nil:
+		r = n.forward.Type().isIncompleteInner(m)
+	default:
+		r = n.isIncomplete(m)
 	}
-
-	return n.isIncomplete(m)
+	// A struct type under construction has size -1 and no fields yet, which
+	// reads as complete; only memoize once the definition has been finished
+	// (size >= 0) or when the result comes from the forward declaration's
+	// definition.
+	if !r && (n.forward != nil || n.size >= 0) {
+		n.isComplete = true
+	}
+	return r
 }
 
 // Kind implements Type.
@@ -1783,9 +1803,14 @@ func (n *UnionType) IsIncomplete() bool {
 	return n.isIncompleteInner(nil)
 }
 
-func (n *UnionType) isIncompleteInner(m map[Type]struct{}) bool {
+func (n *UnionType) isIncompleteInner(m map[Type]struct{}) (r bool) {
 	if n == nil {
 		return true
+	}
+
+	// See (*StructType).isIncompleteInner for the memoization rationale.
+	if n.isComplete {
+		return false
 	}
 
 	if _, ok := m[n]; ok {
@@ -1799,11 +1824,16 @@ func (n *UnionType) isIncompleteInner(m map[Type]struct{}) bool {
 
 	defer func() { delete(m, n) }()
 
-	if n.forward != nil {
-		return n.forward.Type().isIncompleteInner(m)
+	switch {
+	case n.forward != nil:
+		r = n.forward.Type().isIncompleteInner(m)
+	default:
+		r = n.isIncomplete(m)
 	}
-
-	return n.isIncomplete(m)
+	if !r && (n.forward != nil || n.size >= 0) {
+		n.isComplete = true
+	}
+	return r
 }
 
 // Kind implements Type.
