@@ -38,6 +38,7 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"modernc.org/opt"
@@ -53,6 +54,19 @@ const (
 	Builtin = `
 #define __extension__
 #define __restrict_arr restrict
+
+#if __STDC_VERSION__ >= 202000L
+/* C23 keywords, no longer defined as macros by <stdbool.h> and <stddef.h>. */
+#ifndef true
+#define true 1
+#endif
+#ifndef false
+#define false 0
+#endif
+#ifndef nullptr
+#define nullptr ((void*)0)
+#endif
+#endif
 
 #ifndef __builtin_va_list
 #define __builtin_va_list __builtin_va_list
@@ -521,6 +535,32 @@ func lookPath(s string) (path string, err error) {
 	return "", err
 }
 
+// c23Keywords are the C23 spellings of keywords the parser knows under their
+// C11 spellings. They are added to the keyword set when the compiler reports
+// C23 - __STDC_VERSION__ >= 202000L, gcc's C2x value included - because from
+// then on <assert.h>, <stdalign.h>, <stdbool.h> and <threads.h> no longer
+// define them as macros. gcc 15 defaults to C23.
+var c23Keywords = map[string]rune{
+	"alignas":       rune(ALIGNAS),
+	"alignof":       rune(ALIGNOF),
+	"bool":          rune(BOOL),
+	"static_assert": rune(STATICASSERT),
+	"thread_local":  rune(THREADLOCAL),
+}
+
+// stdcVersion returns the value of __STDC_VERSION__ defined in predefined or 0
+// if it is not defined there.
+func stdcVersion(predefined string) int64 {
+	const prefix = "#define __STDC_VERSION__ "
+	for _, l := range strings.Split(predefined, "\n") {
+		if strings.HasPrefix(l, prefix) {
+			n, _ := strconv.ParseInt(strings.TrimSuffix(strings.TrimSpace(l[len(prefix):]), "L"), 10, 64)
+			return n
+		}
+	}
+	return 0
+}
+
 func newConfig(opts []string) (cc, predefined string, includePaths, sysIncludePaths []string, keywords map[string]rune, err error) {
 	if Dmesgs {
 		Dmesg("newConfig(%v)", opts)
@@ -635,6 +675,12 @@ func newConfig(opts []string) (cc, predefined string, includePaths, sysIncludePa
 			}
 		}
 		predefined = strings.Join(a[:w], "\n")
+		if stdcVersion(predefined) >= 202000 {
+			clone()
+			for k, v := range c23Keywords {
+				keywords[k] = v
+			}
+		}
 		args = append(opts, "-v", "-E", "-")
 		cmd = exec.Command(cc, args...)
 		cmd.Env = append(os.Environ(), "LC_ALL=C")

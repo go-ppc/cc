@@ -3694,3 +3694,80 @@ int f(int);
 		}
 	}
 }
+
+// TestC23 covers the C23 spellings of keywords and the identifiers C23 turned
+// into keywords. gcc 15 defaults to C23, and its glibc's <assert.h>,
+// <stdbool.h> and <stddef.h> then define no macro for them any more, which made
+// the loong64 builder fail on testdata/bug/10.c (static_assert) with gcc 15.3.
+func TestC23(t *testing.T) {
+	cfg, err := NewConfig(runtime.GOOS, runtime.GOARCH, "-std=gnu23")
+	if err != nil {
+		t.Skipf("no C23 host compiler: %v", err)
+	}
+
+	if v := stdcVersion(cfg.Predefined); v < 202000 {
+		t.Skipf("__STDC_VERSION__ %v", v)
+	}
+
+	if _, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "testdata/bug/10.c"},
+	}); err != nil {
+		t.Error(err)
+	}
+
+	ast, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "c23.c", Value: `
+#include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+
+static_assert(sizeof(int) >= 2, "int");
+alignas(16) static int a[4];
+static thread_local int tl;
+bool b = true, c = false;
+int *p = nullptr;
+int n = alignof(int);
+int m = sizeof(a);
+`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		kind Kind
+	}{
+		{"b", Bool},
+		{"c", Bool},
+		{"p", Ptr},
+	} {
+		d, ok := ast.Scope.Nodes[tc.name][0].(*Declarator)
+		if !ok {
+			t.Errorf("%s: not found", tc.name)
+			continue
+		}
+
+		if g, e := d.Type().Kind(), tc.kind; g != e {
+			t.Errorf("%s: kind %v, want %v", tc.name, g, e)
+		}
+	}
+
+	// Below C23 the identifiers stay identifiers.
+	cfg = defaultCfg()
+	if stdcVersion(cfg.Predefined) >= 202000 {
+		return
+	}
+
+	if _, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "c17.c", Value: "int bool = 1, true = 1, false = 0, nullptr = 0, alignas = 2, static_assert = 3;\n"},
+	}); err != nil {
+		t.Error(err)
+	}
+}
