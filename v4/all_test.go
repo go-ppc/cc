@@ -4013,3 +4013,121 @@ int x[] = { 1, 2, 3 };
 		t.Fatalf("got %v, want a conflicting types error", err)
 	}
 }
+
+// testWalk calls f for every node reachable from n via exported fields.
+func testWalk(n Node, f func(Node)) {
+	seen := map[uintptr]bool{}
+	var walk func(v reflect.Value)
+	walk = func(v reflect.Value) {
+		switch v.Kind() {
+		case reflect.Ptr:
+			if v.IsNil() || v.Elem().Kind() != reflect.Struct {
+				return
+			}
+
+			if p := v.Pointer(); seen[p] {
+				return
+			} else {
+				seen[p] = true
+			}
+			if x, ok := v.Interface().(Node); ok {
+				f(x)
+			}
+			walk(v.Elem())
+		case reflect.Interface:
+			if !v.IsNil() {
+				walk(v.Elem())
+			}
+		case reflect.Struct:
+			t := v.Type()
+			for i := 0; i < v.NumField(); i++ {
+				if t.Field(i).PkgPath == "" {
+					walk(v.Field(i))
+				}
+			}
+		}
+	}
+	walk(reflect.ValueOf(n))
+}
+
+func TestIssue169(t *testing.T) {
+	// https://gitlab.com/cznic/cc/-/issues/169
+	const src = `
+typedef int T;
+int f(int x) {
+	switch (x) {
+	case 1:
+		int y = 2;
+		return y;
+	case 2: T z = 3; return z;
+	case 3: static const T w = 4; return w;
+	case 4: a: b: T v = 5; return v;
+	default:
+		T *p = 0; return !p;
+	}
+	l: __attribute__((unused)) int q = 6;
+	m:
+	return q;
+}
+`
+	cfg := defaultCfg()
+	ast, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "test.c", Value: src},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]string{}
+	testWalk(ast.TranslationUnit, func(n Node) {
+		ls, ok := n.(*LabeledStatement)
+		if !ok {
+			return
+		}
+
+		var nm string
+		switch ls.Case {
+		case LabeledStatementLabel:
+			nm = ls.Token.SrcStr()
+		case LabeledStatementCaseLabel:
+			nm = "case " + NodeSource(ls.ConstantExpression)
+		case LabeledStatementDefault:
+			nm = "default"
+		}
+		s := ls.Statement
+		switch {
+		case s == nil:
+			got[nm] = "nil"
+		case s.Case == StatementExpr && s.ExpressionStatement.ExpressionList == nil && s.ExpressionStatement.Token.Ch == ';':
+			got[nm] = "empty"
+		default:
+			got[nm] = s.Case.String()
+		}
+	})
+	exp := map[string]string{
+		"case 1":  "empty",
+		"case 2":  "empty",
+		"case 3":  "empty",
+		"case 4":  "StatementLabeled",
+		"a":       "StatementLabeled",
+		"b":       "empty",
+		"default": "empty",
+		"l":       "empty",
+		"m":       "StatementJump",
+	}
+	if g, e := fmt.Sprint(got), fmt.Sprint(exp); g != e {
+		t.Errorf("got %v\nwant %v", g, e)
+	}
+
+	// A declaration is not a statement; the extension only applies where a
+	// block item is expected.
+	if _, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "test.c", Value: "int g(int x) { if (x) l: int y = 1; return 0; }\n"},
+	}); err == nil || !strings.Contains(err.Error(), "expected statement") {
+		t.Fatalf("got %v, want an expected statement error", err)
+	}
+}

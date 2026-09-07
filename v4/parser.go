@@ -118,6 +118,8 @@ type parser struct {
 	toks       []Token
 
 	seq int32
+
+	labelDeclOK bool // The statement about to be parsed is a block item, so a label in it may be followed by a declaration.
 }
 
 func newParser(cfg *Config, fset *fset, sources []Source) (*parser, error) {
@@ -477,6 +479,36 @@ func (p *parser) declarationListOpt() (r *DeclarationList) {
 	return r
 }
 
+// labeledStatementBody parses the statement following the colon of a label.
+//
+// C23 6.8.2 allows a label to be followed by a declaration where a block item
+// is expected, gcc and clang accept that in every mode:
+//
+//	switch (x) {
+//	case 1:
+//		int y = 2;
+//		return y;
+//	}
+//
+// When declOK is set and a declaration follows the label, the label gets an
+// empty statement and the declaration is left to be parsed as the next block
+// item, as if the source read 'label: ; declaration'.
+func (p *parser) labeledStatementBody(declOK bool, colon Token) *Statement {
+	if declOK {
+		switch ch := p.rune(true); {
+		case ch == rune(TYPENAME) && p.peek(1, false).Ch == ':':
+			// Another label, named like a typedef.
+		case p.isDeclarationSpecifier(ch, true), ch == rune(STATICASSERT), ch == rune(AUTOTYPE):
+			t := colon
+			t.Ch = ';'
+			t.Set(nil, []byte{';'})
+			return &Statement{Case: StatementExpr, ExpressionStatement: &ExpressionStatement{Token: t}}
+		}
+		p.labelDeclOK = true // A label may follow: 'a: b: int x;'.
+	}
+	return p.statement(false)
+}
+
 // [0], 6.8.2 Compound statement
 //
 //	 compound-statement:
@@ -610,6 +642,7 @@ func (p *parser) blockItem() *BlockItem {
 again:
 	switch ch := p.rune(true); {
 	case p.isStatement(ch) || p.isExpression(ch) || ch == rune(TYPENAME) && p.peek(1, false).Ch == ':':
+		p.labelDeclOK = true
 		return &BlockItem{Case: BlockItemStmt, Statement: p.statement(false)}
 	case p.isDeclarationSpecifier(ch, true):
 		r0 := p.rune(false)
@@ -670,6 +703,8 @@ func (p *parser) labelDeclaration() (r *LabelDeclaration) {
 //		jump-statement
 //		asm-statement
 func (p *parser) statement(newBlock bool) *Statement {
+	labelDeclOK := p.labelDeclOK
+	p.labelDeclOK = false
 	if newBlock {
 		p.newScope()
 
@@ -679,7 +714,7 @@ func (p *parser) statement(newBlock bool) *Statement {
 	case ch == rune(IDENTIFIER):
 		switch p.peek(1, false).Ch {
 		case ':':
-			return &Statement{Case: StatementLabeled, LabeledStatement: p.labeledStatement()}
+			return &Statement{Case: StatementLabeled, LabeledStatement: p.labeledStatement(labelDeclOK)}
 		default:
 			return &Statement{Case: StatementExpr, ExpressionStatement: p.expressionStatement()}
 		}
@@ -717,7 +752,7 @@ func (p *parser) statement(newBlock bool) *Statement {
 		rune(CASE),
 		rune(DEFAULT):
 
-		return &Statement{Case: StatementLabeled, LabeledStatement: p.labeledStatement()}
+		return &Statement{Case: StatementLabeled, LabeledStatement: p.labeledStatement(labelDeclOK)}
 	default:
 		t := p.shift(false)
 		p.cpp.eh("%v: unexpected %v, expected statement", t.Position(), runeName(t.Ch))
@@ -844,7 +879,10 @@ func (p *parser) jumpStatement() (r *JumpStatement) {
 //		case constant-expression : statement
 //		case constant-expression ... constant-expression : statement
 //		default : statement
-func (p *parser) labeledStatement() (r *LabeledStatement) {
+//
+// labeledStatement parses a labeled statement. declOK reports the statement is
+// a block item, where the label may be followed by a declaration.
+func (p *parser) labeledStatement(declOK bool) (r *LabeledStatement) {
 	defer func() {
 		if ctx := p.switchCtx; ctx != nil && r != nil {
 			ctx.labeled = append(ctx.labeled, r)
@@ -862,18 +900,21 @@ func (p *parser) labeledStatement() (r *LabeledStatement) {
 			r.Token2 = p.shift(false)
 			r.ConstantExpression2 = p.constantExpression()
 			r.Token3 = p.must(':')
-			r.Statement = p.statement(false)
+			r.Statement = p.labeledStatementBody(declOK, r.Token3)
 			return r
 		default:
 			r.Case = LabeledStatementCaseLabel
 			r.Token2 = p.must(':')
-			r.Statement = p.statement(false)
+			r.Statement = p.labeledStatementBody(declOK, r.Token2)
 			return r
 		}
 	case rune(DEFAULT):
-		return &LabeledStatement{Case: LabeledStatementDefault, Token: p.shift(false), Token2: p.must(':'), Statement: p.statement(false), lexicalScope: (*lexicalScope)(p.scope), switchCtx: p.switchCtx}
+		r = &LabeledStatement{Case: LabeledStatementDefault, Token: p.shift(false), Token2: p.must(':'), lexicalScope: (*lexicalScope)(p.scope), switchCtx: p.switchCtx}
+		r.Statement = p.labeledStatementBody(declOK, r.Token2)
+		return r
 	case rune(IDENTIFIER):
-		r = &LabeledStatement{Case: LabeledStatementLabel, Token: p.shift(false), Token2: p.must(':'), Statement: p.statement(false), lexicalScope: (*lexicalScope)(p.scope), switchCtx: p.switchCtx}
+		r = &LabeledStatement{Case: LabeledStatementLabel, Token: p.shift(false), Token2: p.must(':'), lexicalScope: (*lexicalScope)(p.scope), switchCtx: p.switchCtx}
+		r.Statement = p.labeledStatementBody(declOK, r.Token2)
 		switch {
 		case p.fnScope == nil:
 			t := p.shift(false)
