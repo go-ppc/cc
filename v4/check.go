@@ -1262,12 +1262,54 @@ func (n *InitDeclarator) check(c *ctx, t Type, isExtern, isStatic, isAtomic, isT
 	}
 	if n.Case == InitDeclaratorInit {
 		u := t.clone()
+		if t.Kind() == Array && t.IsIncomplete() {
+			// [0]6.2.7/3: The composite type of a prior declaration of the same
+			// object that has a complete array type supplies the array size:
+			//
+			//	static struct H handler_info[64];
+			//	static struct H handler_info[] = { {1}, {2}, {0} };
+			//
+			// declares an array of 64 elements that the initializer partially
+			// initializes, not an array of 3 elements conflicting with it.
+			if prior := n.Declarator.priorCompleteArray(t); prior != nil {
+				u = prior
+			}
+		}
 		n.Initializer.check(c, nil, u, 0, nil, nil)
 		if t.Kind() == Array && t.IsIncomplete() {
 			n.Declarator.typ = u
 		}
 		n.Declarator.write++
 	}
+}
+
+// priorCompleteArray returns the complete array type of a previous file scope
+// declaration of n compatible with the incomplete array type t of n, if any.
+func (n *Declarator) priorCompleteArray(t Type) Type {
+	s := n.LexicalScope()
+	if s == nil || s.Parent != nil {
+		return nil
+	}
+
+	for _, v := range s.Nodes[n.Name()] {
+		d, ok := v.(*Declarator)
+		if !ok {
+			continue
+		}
+
+		if d == n {
+			break
+		}
+
+		if d.isTypename || d.typ == nil {
+			continue
+		}
+
+		if u := d.Type(); u.Kind() == Array && !u.IsIncomplete() && t.IsCompatible(u) {
+			return u
+		}
+	}
+	return nil
 }
 
 // Initializer:

@@ -3841,7 +3841,7 @@ func testInitializer(ast *AST, nm string) *Initializer {
 		}
 
 		for l := ed.Declaration.InitDeclaratorList; l != nil; l = l.InitDeclaratorList {
-			if id := l.InitDeclarator; id.Declarator.Name() == nm {
+			if id := l.InitDeclarator; id.Initializer != nil && id.Declarator.Name() == nm {
 				return id.Initializer
 			}
 		}
@@ -3955,5 +3955,61 @@ struct R3 { int x; } r3[8] = { [1][2] = 1 };
 				t.Errorf("insts[%d]: union field %v, want op", i, f)
 			}
 		}
+	}
+}
+
+func TestIssue168(t *testing.T) {
+	// https://gitlab.com/cznic/cc/-/issues/168
+	const src = `
+struct H { int a; };
+static struct H handler_info[64];
+static struct H handler_info[] = { {1}, {2}, {0} };
+int n = sizeof handler_info / sizeof handler_info[0];
+extern int x[];
+int x[] = { 1, 2, 3 };
+`
+	cfg := defaultCfg()
+	ast, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "test.c", Value: src},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		nm  string
+		len int64
+	}{
+		{"handler_info", 64},
+		{"x", 3},
+	} {
+		for i, v := range ast.Scope.Nodes[tc.nm] {
+			x, ok := v.(*Declarator).Type().(*ArrayType)
+			if !ok {
+				t.Errorf("%s#%d: not an array", tc.nm, i)
+				continue
+			}
+
+			if g, e := x.Len(), tc.len; g != e {
+				t.Errorf("%s#%d: len %v, want %v", tc.nm, i, g, e)
+			}
+		}
+	}
+	if in := testInitializer(ast, "handler_info"); in == nil || in.Type().(*ArrayType).Len() != 64 {
+		t.Errorf("handler_info: initializer type %v, want array of 64", in.Type())
+	}
+	if g, e := testInitializer(ast, "n").Value(), Int64Value(64); g != e {
+		t.Errorf("n: %v, want %v", g, e)
+	}
+
+	// The reverse order is a conflict, as in gcc and clang.
+	if _, err = Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "test.c", Value: "struct H { int a; };\nstatic struct H b[] = { {1} };\nstatic struct H b[64];\n"},
+	}); err == nil || !strings.Contains(err.Error(), "conflicting types") {
+		t.Fatalf("got %v, want a conflicting types error", err)
 	}
 }
