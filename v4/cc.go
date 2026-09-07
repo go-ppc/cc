@@ -280,6 +280,7 @@ void __builtin_unreachable();
 
 #ifdef __APPLE__
 #define __has_include(xxx) __has_include(xxx)
+#define __has_include_next(xxx) __has_include_next(xxx)
 int __darwin_check_fd_set_overflow(int, void *, int);
 #endif
 

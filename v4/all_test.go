@@ -26,6 +26,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 
 	"github.com/dustin/go-humanize"
 	"github.com/pbnjay/memory"
@@ -4129,5 +4130,59 @@ int f(int x) {
 		{Name: "test.c", Value: "int g(int x) { if (x) l: int y = 1; return 0; }\n"},
 	}); err == nil || !strings.Contains(err.Error(), "expected statement") {
 		t.Fatalf("got %v, want an expected statement error", err)
+	}
+}
+
+func TestIssue170(t *testing.T) {
+	// https://gitlab.com/cznic/cc/-/issues/170
+	if runtime.GOOS == "windows" {
+		t.Skip("fstest.MapFS uses slash separated paths")
+	}
+
+	cfg := defaultCfg()
+	cfg.FS = fstest.MapFS{
+		"a/limits.h": &fstest.MapFile{Data: []byte(`
+#define A_LIMITS 1
+#if __has_include_next(<limits.h>)
+#include_next <limits.h>
+#endif
+#if __has_include_next("limits.h")
+#define NEXT_QUOTED 1
+#endif
+#if __has_include_next(<nonexistent.h>)
+#define NEXT_NONEXISTENT 1
+#endif
+#if __has_include(<limits.h>)
+#define HAS_LIMITS 1
+#endif
+`)},
+		"b/limits.h": &fstest.MapFile{Data: []byte("#define B_LIMITS 1\n")},
+	}
+	cfg.IncludePaths = nil
+	cfg.SysIncludePaths = []string{"a", "b"}
+	ast, err := Parse(cfg, []Source{{Name: "test.c", Value: `
+#include <limits.h>
+#ifdef __has_include
+#define DEFINED0 1
+#endif
+#ifdef __has_include_next
+#define DEFINED1 1
+#endif
+#if defined(__has_include_next) && __has_include_next(<limits.h>)
+#define DEFINED2 1
+#endif
+int __predefined_declarator;
+`}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, nm := range []string{"A_LIMITS", "B_LIMITS", "HAS_LIMITS", "NEXT_QUOTED", "DEFINED0", "DEFINED1", "DEFINED2"} {
+		if ast.Macros[nm] == nil {
+			t.Errorf("%s not defined", nm)
+		}
+	}
+	if ast.Macros["NEXT_NONEXISTENT"] != nil {
+		t.Error("NEXT_NONEXISTENT defined")
 	}
 }

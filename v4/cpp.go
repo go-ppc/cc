@@ -1402,16 +1402,11 @@ func (c *cpp) parseDefined(ts tokenSequence) (r tokenSequence) {
 	oneTok.Set(nil, one)
 	zeroTok := Token{s: t.s, Ch: rune(PPNUMBER)}
 	zeroTok.Set(nil, zero)
-	switch c.macro(t.Token, nm) {
-	case nil:
-		switch nm {
-		case "__has_include", "__has_include__":
-			t.Token = oneTok
-		default:
-			t.Token = zeroTok
-		}
-	default:
+	switch {
+	case c.isDefined(t.Token, nm):
 		t.Token = oneTok
+	default:
+		t.Token = zeroTok
 	}
 
 	s := cppTokens(append([]cppToken{t}, *ts.(*cppTokens)...))
@@ -1747,20 +1742,9 @@ func (c *cpp) includeNext(ln controlLine) {
 		return
 	}
 
-	searchPaths := c.cfg.SysIncludePaths
-	var using string
-	if c.included != nil {
-		for i, v := range searchPaths {
-			if c.included.using == v {
-				searchPaths = searchPaths[i+1:]
-				using = c.included.using
-				break
-			}
-		}
-	}
-	fn := ln[2].Position().Filename
+	searchPaths := c.includeNextPaths()
 	if Dmesgs {
-		Dmesg("#include_next processed argument in 'nm' %s, current file 'fn' %s, included 'using' %s", nm, fn, using)
+		Dmesg("#include_next processed argument in 'nm' %s, current file 'fn' %s", nm, ln[2].Position().Filename)
 		if c.included != nil {
 			Dmesg("c.included.using: %s", c.included.using)
 		}
@@ -1867,7 +1851,55 @@ func (c *cpp) include(ln controlLine) {
 	}
 }
 
-func (c *cpp) hasInclude(t Token, raw string) (r bool) {
+// isDefined reports whether nm is a macro or one of the __has_include forms,
+// which gcc and clang report as defined in #ifdef and defined().
+func (c *cpp) isDefined(t Token, nm string) bool {
+	if c.macro(t, nm) != nil {
+		return true
+	}
+
+	switch nm {
+	case "__has_include", "__has_include__", "__has_include_next":
+		return true
+	}
+	return false
+}
+
+// includeNextPaths returns the system include paths #include_next and
+// __has_include_next search: the paths following the one the current file was
+// found in, or all of them when the current file was not found via a system
+// include path, eg. when it's the main file.
+func (c *cpp) includeNextPaths() []string {
+	r := c.cfg.SysIncludePaths
+	if c.included != nil {
+		using := filepath.Clean(c.included.using)
+		for i, v := range r {
+			if filepath.Clean(v) == using {
+				return r[i+1:]
+			}
+		}
+	}
+	return r
+}
+
+// hasInclude evaluates __has_include(raw), or __has_include_next(raw) when
+// next is set. The latter searches the paths #include_next would.
+func (c *cpp) hasInclude(t Token, raw string, next bool) (r bool) {
+	if next {
+		switch {
+		case strings.HasPrefix(raw, `"`) && strings.HasSuffix(raw, `"`), strings.HasPrefix(raw, "<") && strings.HasSuffix(raw, ">"):
+			nm := raw[1 : len(raw)-1]
+			for _, v := range c.includeNextPaths() {
+				if c.hasFile(t, filepath.Join(v, nm)) {
+					return true
+				}
+			}
+		default:
+			c.eh("%v: invalid argument", t.Position())
+		}
+		return false
+	}
+
 	switch {
 	case strings.HasPrefix(raw, `"`) && strings.HasSuffix(raw, `"`):
 		nm := raw[1 : len(raw)-1]
@@ -1951,7 +1983,7 @@ func (c *cpp) ifGroup(ig *ifGroup) bool {
 		}
 
 		t := ln[2]
-		return c.macro(t, t.SrcStr()) != nil
+		return c.isDefined(t, t.SrcStr())
 	case "ifndef":
 		if len(ln) < 3 { // '#' "ifndef" IDENTIFIER
 			c.eh("%v: expected identifier", ln[1].Position())
@@ -1959,7 +1991,7 @@ func (c *cpp) ifGroup(ig *ifGroup) bool {
 		}
 
 		t := ln[2]
-		return c.macro(t, t.SrcStr()) == nil
+		return !c.isDefined(t, t.SrcStr())
 	case "if":
 		if len(ln) < 3 { // '#' "if" <expr>
 			c.eh("%v: expected expression", ln[1].Position())
@@ -2689,7 +2721,7 @@ func (c *cpp) primaryExpression(s *cppTokens, eval bool) interface{} {
 	case rune(IDENTIFIER):
 		s.shift()
 		switch t.SrcStr() {
-		case "__has_include", "__has_include__":
+		case "__has_include", "__has_include__", "__has_include_next":
 			t0 := t
 			var arg string
 			if t := s.token(); t.Ch != '(' {
@@ -2727,7 +2759,7 @@ func (c *cpp) primaryExpression(s *cppTokens, eval bool) interface{} {
 			switch t = s.token(); t.Ch {
 			case ')':
 				s.shift()
-				if c.hasInclude(t0, arg) {
+				if c.hasInclude(t0, arg, t0.SrcStr() == "__has_include_next") {
 					return int64(1)
 				}
 
