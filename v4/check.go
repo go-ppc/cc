@@ -1661,74 +1661,37 @@ func (n *InitializerList) checkArray(c *ctx, currObj Type, t *ArrayType, off int
 	// trc("%sARRAY %v: curr %s, t %s", c.indentInc(), n.Position(), currObj, t)
 	// defer func() { trc("%sEXIT ARRAY", c.indentDec()) }()
 	elemT := t.Elem()
+	incomplete := t.IsIncomplete()
 	var lo, hi int64
-	switch {
-	case t.IsIncomplete():
-		for n != nil {
-			if n.Designation == nil {
-				n = n.Initializer.check(c, currObj, elemT, off+lo*elemT.Size(), n, nil)
-				lo++
+	for n != nil {
+		if n.Designation == nil {
+			if !incomplete && lo >= t.elems {
+				return n
+			}
+
+			n = n.Initializer.check(c, currObj, elemT, off+lo*elemT.Size(), n, nil)
+			lo++
+			if incomplete {
 				t.elems = mathutil.MaxInt64(t.elems, lo)
-				continue
 			}
-
-			if currObj != t {
-				return n
-			}
-
-			dl := n.Designation.DesignatorList
-			dl.Designator.typ = elemT
-			n2 := *n
-			n2.Designation = nil
-			n = &n2
-			lo, hi = dl.Designator.index(c)
-			if lo < 0 {
-				return nil
-			}
-
-			switch {
-			case hi < 0:
-				n.Initializer.nelems = 1
-			default:
-				n.Initializer.nelems = hi - lo + 1
-			}
-
-			switch {
-			case dl.DesignatorList == nil:
-				n = n.Initializer.check(c, currObj, elemT, off+lo*elemT.Size(), n, nil)
-			default:
-				n = n.checkDesignatorList(dl.DesignatorList, c, elemT, off+lo*elemT.Size(), hi >= 0)
-			}
-			lo = mathutil.MaxInt64(lo, hi) + 1
-			t.elems = mathutil.MaxInt64(t.elems, lo)
+			continue
 		}
-		return nil
-	default:
-		for n != nil {
-			if n.Designation == nil {
-				if lo >= t.elems {
-					return n
-				}
 
-				n = n.Initializer.check(c, currObj, elemT, off+lo*elemT.Size(), n, nil)
-				lo++
-				continue
-			}
+		if currObj != t {
+			return n
+		}
 
-			if currObj != t {
-				return n
-			}
+		dl := n.Designation.DesignatorList
+		dl.Designator.typ = elemT
+		n2 := *n
+		n2.Designation = nil
+		n = &n2
+		lo, hi = dl.Designator.index(c)
+		if lo < 0 {
+			return nil
+		}
 
-			dl := n.Designation.DesignatorList
-			dl.Designator.typ = elemT
-			n2 := *n
-			n2.Designation = nil
-			n = &n2
-			lo, hi = dl.Designator.index(c)
-			if lo < 0 {
-				return nil
-			}
-
+		if !incomplete {
 			if lo >= t.elems {
 				c.errors.add(errorf("%v: index %v out of range for array of %v elements", dl.Designator.Position(), lo, t.elems))
 				return nil
@@ -1738,24 +1701,24 @@ func (n *InitializerList) checkArray(c *ctx, currObj Type, t *ArrayType, off int
 				c.errors.add(errorf("%v: index %v out of range for array of %v elements", dl.Designator.Position(), hi, t.elems))
 				return nil
 			}
-
-			switch {
-			case hi < 0:
-				n.Initializer.nelems = 1
-			default:
-				n.Initializer.nelems = hi - lo + 1
-			}
-
-			switch {
-			case dl.DesignatorList == nil:
-				n = n.Initializer.check(c, currObj, elemT, off+lo*elemT.Size(), n, nil)
-			default:
-				n = n.checkDesignatorList(dl.DesignatorList, c, elemT, off+lo*elemT.Size(), hi >= 0)
-			}
-			lo = mathutil.MaxInt64(lo, hi) + 1
 		}
-		return nil
+
+		// The GNU [lo ... hi] designator initializes every element of the range
+		// with the initializer and initialization continues after the last of
+		// them.
+		n.Initializer.nelems = 1
+		if hi >= 0 {
+			n.Initializer.nelems = hi - lo + 1
+		}
+		d := designated{obj: t, t: t, off: off}
+		d.element(lo, hi)
+		n = d.check(c, n, dl.DesignatorList, hi >= 0)
+		lo = mathutil.MaxInt64(lo, hi) + 1
+		if incomplete {
+			t.elems = mathutil.MaxInt64(t.elems, lo)
+		}
 	}
+	return nil
 }
 
 func (n *InitializerList) checkStruct(c *ctx, currObj Type, t *StructType, off int64) *InitializerList {
@@ -1775,9 +1738,7 @@ func (n *InitializerList) checkStruct(c *ctx, currObj Type, t *StructType, off i
 	}
 	f := t.FieldByIndex(0)
 	for n != nil {
-		for f != nil && f.IsBitfield() && (f.ValueBits() == 0 || f.Name() == "") {
-			f = t.FieldByIndex(f.index + 1)
-		}
+		f = nextInitializableField(t, f)
 		if n.Designation == nil {
 			if f == nil {
 				return n
@@ -1801,19 +1762,14 @@ func (n *InitializerList) checkStruct(c *ctx, currObj Type, t *StructType, off i
 			return nil
 		}
 
-		if f = t.FieldByName(nm); f == nil {
-			c.errors.add(errorf("%v: %v has no member %v", n.Position(), t, nm))
+		d := designated{obj: t, t: t, off: off}
+		if !d.member(c, dl.Designator, nm) {
 			return nil
 		}
 
-		dl.Designator.typ = f.Type()
-		if dl.DesignatorList == nil {
-			n = n.Initializer.check(c, currObj, f.Type(), off+f.Offset(), n, f)
-			f = t.FieldByIndex(f.index + 1)
-			continue
-		}
-
-		n = n.checkDesignatorList(dl.DesignatorList, c, f.Type(), off+f.Offset(), false)
+		dl.Designator.typ = d.t
+		f = d.levels[0].f
+		n = d.check(c, n, dl.DesignatorList, false)
 		f = t.FieldByIndex(f.index + 1)
 	}
 	return nil
@@ -1822,11 +1778,8 @@ func (n *InitializerList) checkStruct(c *ctx, currObj Type, t *StructType, off i
 func (n *InitializerList) checkUnion(c *ctx, currObj Type, t *UnionType, off int64) *InitializerList {
 	// trc("%sUNION (A) %v: curr %s, t %s", c.indentInc(), n.Position(), currObj, t)
 	// defer func() { trc("%sEXIT UNION (Z)", c.indentDec()) }()
-	f := t.FieldByIndex(0)
 	if n.Designation == nil {
-		for f != nil && f.IsBitfield() && (f.ValueBits() == 0 || f.Name() == "") {
-			f = t.FieldByIndex(f.index + 1)
-		}
+		f := nextInitializableField(t, t.FieldByIndex(0))
 		if f == nil {
 			return n
 		}
@@ -1859,26 +1812,26 @@ func (n *InitializerList) checkUnion(c *ctx, currObj Type, t *UnionType, off int
 			return nil
 		}
 
-		if f = t.FieldByName(nm); f == nil {
-			c.errors.add(errorf("%v: %v has no member %v", n.Position(), t, nm))
+		d := designated{obj: t, t: t, off: off}
+		if !d.member(c, dl.Designator, nm) {
 			return nil
 		}
 
-		if p := f.Parent(); p != nil {
-			f = p
-			n = n0
-		}
-
-		n0.unionField = f
-		dl.Designator.typ = f.Type()
-		switch {
-		case dl.DesignatorList == nil:
-			n = n.Initializer.check(c, f.Type(), f.Type(), off+f.Offset(), n, f)
-		default:
-			n = n.checkDesignatorList(dl.DesignatorList, c, f.Type(), off+f.Offset(), false)
-		}
+		n0.unionField = d.levels[0].f
+		dl.Designator.typ = d.t
+		n = d.check(c, n, dl.DesignatorList, false)
 	}
 	return n
+}
+
+// nextInitializableField returns f, or the first field following f, that an
+// initializer list initializes: unnamed bit fields do not participate in
+// initialization ([0]6.7.9/9).
+func nextInitializableField(t interface{ FieldByIndex(int) *Field }, f *Field) *Field {
+	for f != nil && f.IsBitfield() && (f.ValueBits() == 0 || f.Name() == "") {
+		f = t.FieldByIndex(f.index + 1)
+	}
+	return f
 }
 
 func (n *Designator) name(c *ctx) string {
@@ -1964,44 +1917,142 @@ func int64Value(c *ctx, n ExpressionNode) (int64, bool) {
 	return 0, false
 }
 
-func (n *InitializerList) checkDesignatorList(dl *DesignatorList, c *ctx, currObj Type, off int64, ranged bool) *InitializerList {
-	t := currObj
-	var fld *Field
+// designated is the subobject a designation selects within obj, the object of
+// a brace enclosed initializer list, and the aggregates on the path to it.
+type designated struct {
+	obj    Type
+	t      Type   // The selected subobject.
+	off    int64  // Its offset within obj.
+	fld    *Field // The selected subobject as a struct or union member, if it is one.
+	shift  int64  // Offset of the last element of a range of elements relative to the first one, see check.
+	levels []designatedLevel
+}
+
+// designatedLevel is an aggregate on the path of a designation and the
+// subobject the designation selects within it.
+type designatedLevel struct {
+	t   Type   // *StructType, *UnionType or *ArrayType.
+	off int64  // Offset of the aggregate within the object of the initializer list.
+	f   *Field // The selected member of a struct or union.
+	idx int64  // The (last) selected element of an array.
+}
+
+// member selects member nm of the struct or union d.t, looking through
+// anonymous struct and union members ([0]6.7.2.1/13). It reports an error and
+// returns false when there is no such member.
+func (d *designated) member(c *ctx, pos Node, nm string) bool {
+	chain := memberChain(d.t, nm)
+	if chain == nil {
+		c.errors.add(errorf("%v: type %s has no member %s", pos.Position(), d.t, nm))
+		return false
+	}
+
+	for _, f := range chain {
+		d.levels = append(d.levels, designatedLevel{t: d.t, off: d.off, f: f})
+		d.t = f.Type()
+		d.off += f.Offset()
+		d.fld = f
+	}
+	return true
+}
+
+// memberChain returns the members on the path from a member of the struct or
+// union t to the member named nm: just the member itself when it's declared
+// in t, or the anonymous struct or union members leading to it.
+func memberChain(t Type, nm string) []*Field {
+	var byIndex func(int) *Field
+	switch x := t.(type) {
+	case *StructType:
+		byIndex = x.FieldByIndex
+	case *UnionType:
+		byIndex = x.FieldByIndex
+	default:
+		return nil
+	}
+
+	for i := 0; ; i++ {
+		f := byIndex(i)
+		if f == nil {
+			break
+		}
+
+		if f.Name() == nm {
+			return []*Field{f}
+		}
+	}
+	for i := 0; ; i++ {
+		f := byIndex(i)
+		if f == nil {
+			return nil
+		}
+
+		if f.Name() != "" {
+			continue
+		}
+
+		switch f.Type().Kind() {
+		case Struct, Union:
+			if r := memberChain(f.Type(), nm); r != nil {
+				return append([]*Field{f}, r...)
+			}
+		}
+	}
+}
+
+// element selects element lo of the array d.t, or the elements lo through hi
+// when hi >= 0.
+func (d *designated) element(lo, hi int64) {
+	x := d.t.(*ArrayType)
+	d.levels = append(d.levels, designatedLevel{t: x, off: d.off, idx: mathutil.MaxInt64(lo, hi)})
+	d.t = x.Elem()
+	d.fld = nil
+	d.off += lo * d.t.Size()
+	if hi > lo {
+		d.shift += (hi - lo) * d.t.Size()
+	}
+}
+
+// check resolves the designators dl from the subobject d selects, initializes
+// the selected subobject with the initializer at n, then continues with the
+// non designated initializers following it and returns the rest of the list.
+// ranged reports the designation includes a range of array elements.
+//
+// [0]6.7.9/17: ... a designation causes the following initializer to begin
+// initialization of the subobject described by the designator. Initialization
+// then continues forward in order, beginning with the next subobject after
+// that described by the designator.
+//
+// /20: ... If the initializer of a subaggregate or contained union begins with
+// a left brace, the initializers enclosed by that brace and its matching right
+// brace initialize the elements or members of the subaggregate or the
+// contained union. Otherwise, only enough initializers from the list are taken
+// to account for the elements or members of the subaggregate or the first
+// member of the contained union; any remaining initializers are left to
+// initialize the next element or member of the aggregate of which the current
+// subaggregate or contained union is a part.
+//
+// The initializers following a designated subobject thus initialize the
+// subobjects following it at every level of the designation, innermost first:
+//
+//	struct { int x; struct { int y, z; } in; int w; } s = { .in.y = 1, 2, 3 }; // in.z = 2, w = 3
+//
+// A union member has no following subobject. The caller continues at the
+// first level, the object of the initializer list, itself. After a range of
+// elements, initialization continues after the last element of the range.
+func (d *designated) check(c *ctx, n *InitializerList, dl *DesignatorList, ranged bool) *InitializerList {
 	for ; dl != nil; dl = dl.DesignatorList {
-		fld = nil
-		switch x := t.(type) {
-		case *StructType:
+		switch x := d.t.(type) {
+		case *StructType, *UnionType:
 			nm := dl.Designator.name(c)
 			if nm == "" {
 				return nil
 			}
 
-			f := x.FieldByName(nm)
-			if f == nil {
-				c.errors.add(errorf("%v: type %s has no member %s", dl.Designator.Position(), t, nm))
+			if !d.member(c, dl.Designator, nm) {
 				return nil
 			}
 
-			t = f.Type()
-			dl.Designator.typ = t
-			off += f.Offset()
-			fld = f
-		case *UnionType:
-			nm := dl.Designator.name(c)
-			if nm == "" {
-				return nil
-			}
-
-			f := x.FieldByName(nm)
-			if f == nil {
-				c.errors.add(errorf("%v: type %s has no member %s", dl.Designator.Position(), t, nm))
-				return nil
-			}
-
-			t = f.Type()
-			dl.Designator.typ = t
-			off += f.Offset()
-			fld = f
+			dl.Designator.typ = d.t
 		case *ArrayType:
 			dl.Designator.typ = x.Elem()
 			lo, hi := dl.Designator.index(c)
@@ -2009,45 +2060,42 @@ func (n *InitializerList) checkDesignatorList(dl *DesignatorList, c *ctx, currOb
 				return nil
 			}
 
-			if hi > lo {
-				c.errors.add(errorf("TODO: %T", x))
+			switch {
+			case hi >= 0:
+				c.errors.add(errorf("%v: a range of elements can be designated only in the outermost array of an initializer list", dl.Designator.Position()))
+				return nil
+			case ranged:
+				c.errors.add(errorf("%v: nested ranged designations", dl.Designator.Position()))
 				return nil
 			}
 
-			t = x.Elem()
-			off += lo * t.Size()
-			if hi < 0 {
-				hi = lo
+			if e := x.Len(); e >= 0 && lo >= e {
+				c.errors.add(errorf("%v: index out of range: %v", dl.Position(), lo))
+				return nil
 			}
-			if e := x.Len(); e >= 0 {
-				if lo >= e {
-					c.errors.add(errorf("%v: index out of range: %v", dl.Position(), lo))
-					return nil
-				}
 
-				if hi >= e {
-					c.errors.add(errorf("%v: index out of range: %v", dl.Position(), hi))
-					return nil
-				}
-			}
-			switch {
-			case hi < 0:
-				n.Initializer.nelems = 1
-			default:
-				if ranged {
-					c.errors.add(errorf("%v: nested ranged desinations", dl.Position()))
-					return nil
-				}
-
-				n.Initializer.nelems = hi - lo + 1
-				ranged = true
-			}
+			d.element(lo, -1)
 		default:
-			c.errors.add(errorf("%v: designator into %s, expected a struct, union or array", dl.Designator.Position(), t))
+			c.errors.add(errorf("%v: designator into %s, expected a struct, union or array", dl.Designator.Position(), d.t))
 			return nil
 		}
 	}
-	return n.Initializer.check(c, currObj, t, off, n, fld)
+	n = n.Initializer.check(c, d.obj, d.t, d.off, n, d.fld)
+	for i := len(d.levels) - 1; i > 0 && n != nil && n.Designation == nil; i-- {
+		l := d.levels[i]
+		switch x := l.t.(type) {
+		case *StructType:
+			for f := nextInitializableField(x, x.FieldByIndex(l.f.index+1)); f != nil && n != nil && n.Designation == nil; f = nextInitializableField(x, x.FieldByIndex(f.index+1)) {
+				n = n.Initializer.check(c, d.obj, f.Type(), l.off+d.shift+f.Offset(), n, f)
+			}
+		case *ArrayType:
+			elemT := x.Elem()
+			for i := l.idx + 1; (x.Len() < 0 || i < x.Len()) && n != nil && n.Designation == nil; i++ {
+				n = n.Initializer.check(c, d.obj, elemT, l.off+d.shift+i*elemT.Size(), n, nil)
+			}
+		}
+	}
+	return n
 }
 
 // Declarator:

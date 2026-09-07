@@ -4295,3 +4295,95 @@ int f(float x, v4sf v) {
 		}
 	}
 }
+
+func TestIssue172(t *testing.T) {
+	// https://gitlab.com/cznic/cc/-/issues/172
+	//
+	// [0]6.7.9/17: Initialization then continues forward in order, beginning
+	// with the next subobject after that described by the designator.
+	const src = `
+struct In { int y, z; };
+struct PQ { int p, q; };
+struct In3 { struct PQ pq; int r; };
+struct S1 { int x; struct In in; int w; } s1 = { .in.y = 1, 2 };
+struct S2 { int x; struct In in; int w; } s2 = { .in.y = 1, 2, 3 };
+struct S3 { int x; struct In3 in; int w; } s3 = { .in.pq.p = 1, 2, 3, 4 };
+int a4[2][3] = { [0][1] = 5, 6, 7, 8 };
+struct S5 { int a[2][2]; int w; } s5 = { .a[0][1] = 1, 2, 3, 4 };
+struct S6 { struct In in[2]; int w; } s6 = { .in[0].z = 1, 2, 3, 4 };
+union U7 { unsigned short cache; struct { unsigned char code, arg; } op; };
+union U7 u7 = { .op.code = 1, 2 };
+struct S8 { union U7 u; int w; } s8 = { .u.op.arg = 1, 2 };
+int a9[6] = { [1 ... 2] = 7, 8 };
+struct S10 { int x; struct In in; struct PQ pq; int w; } s10 = { .in.y = 1, 2, 3, 4, 5 };
+struct S11 { int x; struct { int m, n; }; int w; } s11 = { .m = 1, 2, 3 };
+struct S12 { int x; struct In in; int w; } s12 = { .in.y = 1, .in.z = 2, 3 };
+struct S13 { struct In in; int w; } s13[2] = { [0].in.y = 1, 2, 3, 4, 5 };
+struct S14 { int x; struct In in; int w; } s14 = { .in.z = 1, 2 };
+struct XY { int x, y; };
+struct XY s15[2] = { [0 ... 1].x = 1, 2 };
+int a16[2][2] = { [0] = 1, 2, [1] = 3, 4 };
+struct S17 { int x; struct { int m, n; }; int w; } s17 = { .n = 1, 2, .m = 3, 4 };
+struct S18 { int x; union { int u; struct { char c1, c2; } cs; }; int w; } s18 = { .cs.c1 = 1, 2, 3 };
+`
+	cfg := defaultCfg()
+	ast, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "test.c", Value: src},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verified against gcc 13: offset:value:len of the initializers, in
+	// source order.
+	for _, tc := range []struct{ nm, leaves string }{
+		{"s1", "4:1:1 8:2:1"},
+		{"s2", "4:1:1 8:2:1 12:3:1"},
+		{"s3", "4:1:1 8:2:1 12:3:1 16:4:1"},
+		{"a4", "4:5:1 8:6:1 12:7:1 16:8:1"},
+		{"s5", "4:1:1 8:2:1 12:3:1 16:4:1"},
+		{"s6", "4:1:1 8:2:1 12:3:1 16:4:1"},
+		{"u7", "0:1:1 1:2:1"},
+		{"s8", "1:1:1 4:2:1"},
+		{"a9", "4:7:2 12:8:1"},
+		{"s10", "4:1:1 8:2:1 12:3:1 16:4:1 20:5:1"},
+		{"s11", "4:1:1 8:2:1 12:3:1"},
+		{"s12", "4:1:1 8:2:1 12:3:1"},
+		{"s13", "0:1:1 4:2:1 8:3:1 12:4:1 16:5:1"},
+		{"s14", "8:1:1 12:2:1"},
+		{"s15", "0:1:2 12:2:1"},
+		{"a16", "0:1:1 4:2:1 8:3:1 12:4:1"},
+		{"s17", "8:1:1 12:2:1 4:3:1 8:4:1"},
+		{"s18", "4:1:1 5:2:1 8:3:1"},
+	} {
+		in := testInitializer(ast, tc.nm)
+		if in == nil {
+			t.Errorf("%s: initializer not found", tc.nm)
+			continue
+		}
+
+		var a []string
+		testInitializerLeaves(in, &a)
+		if g, e := strings.Join(a, " "), tc.leaves; g != e {
+			t.Errorf("%s: got leaves %q, want %q", tc.nm, g, e)
+		}
+	}
+
+	for _, tc := range []struct{ src, err string }{
+		{"struct { int a[4]; } e1 = { .a[0 ... 2] = 1 };", "outermost array"},
+		{"int e2[2][2] = { [0 ... 1][1] = 5 };", "nested ranged"},
+		{"struct { int a; struct { int b; } e; } e3 = { .b = 1 };", "has no member b"},
+		{"struct { int x; struct { int y; } in; } e4 = { .in.y = 1, 2, 3 };", "too many items"},
+	} {
+		_, err := Translate(cfg, []Source{
+			{Name: "<predefined>", Value: cfg.Predefined},
+			{Name: "<builtin>", Value: Builtin},
+			{Name: "test.c", Value: tc.src + "\n"},
+		})
+		if err == nil || !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("%s: got %v, want an error containing %q", tc.src, err, tc.err)
+		}
+	}
+}
