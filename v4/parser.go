@@ -65,6 +65,7 @@ var defaultKeywords = map[string]rune{
 	"_Float128":     rune(FLOAT128),
 	"_Float128x":    rune(FLOAT128X),
 	"_Float16":      rune(FLOAT16),
+	"__fp16":        rune(FLOAT16),
 	"_Float32":      rune(FLOAT32),
 	"_Float32x":     rune(FLOAT32X),
 	"_Float64":      rune(FLOAT64),

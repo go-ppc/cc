@@ -4186,3 +4186,112 @@ int __predefined_declarator;
 		t.Error("NEXT_NONEXISTENT defined")
 	}
 }
+
+func TestIssue171(t *testing.T) {
+	// https://gitlab.com/cznic/cc/-/issues/171
+
+	// __fp16 is accepted as a spelling of _Float16 and __builtin_bit_cast is
+	// available, here checked with the windows/amd64 ABI, which knows the half
+	// precision types.
+	cfg := defaultCfg()
+	abi, err := NewABI("windows", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg.ABI = abi
+	ast, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "test.c", Value: `
+__fp16 h;
+_Float16 g;
+_Float16 _Complex c;
+__bf16 b;
+typedef float v4sf __attribute__((__vector_size__(16)));
+int f(float x, v4sf v) {
+	unsigned u = __builtin_bit_cast(unsigned, x);
+	float y = __builtin_bit_cast(float, u + 1);
+	typedef unsigned char v16qi __attribute__((__vector_size__(16)));
+	v16qi w = __builtin_bit_cast(v16qi, v);
+	return u + y + w[0];
+}
+`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		nm   string
+		kind Kind
+		size int64
+	}{
+		{"h", Float16, 2},
+		{"g", Float16, 2},
+		{"c", ComplexFloat16, 4},
+		{"b", BFloat16, 2},
+	} {
+		typ := ast.Scope.Nodes[tc.nm][0].(*Declarator).Type()
+		if g, e := typ.Kind(), tc.kind; g != e {
+			t.Errorf("%s: kind %v, want %v", tc.nm, g, e)
+		}
+		if g, e := typ.Size(), tc.size; g != e {
+			t.Errorf("%s: size %v, want %v", tc.nm, g, e)
+		}
+	}
+	var types []string
+	testWalk(ast.TranslationUnit, func(n Node) {
+		x, ok := n.(*InitDeclarator)
+		if !ok || x.Initializer == nil || x.Position().Filename != "test.c" || strings.HasPrefix(x.Declarator.Name(), "__") {
+			return
+		}
+
+		typ := x.Initializer.Type()
+		if v, ok := typ.(*PredefinedType); ok && v.VectorSize() > 0 {
+			types = append(types, fmt.Sprintf("%s: vector %d of %s", x.Declarator.Name(), v.VectorSize(), typ))
+			return
+		}
+
+		types = append(types, x.Declarator.Name()+": "+typ.String())
+	})
+	if g, e := strings.Join(types, ", "), "u: unsigned, y: float, w: vector 16 of unsigned char"; g != e {
+		t.Errorf("__builtin_bit_cast result types\n got %q\nwant %q", g, e)
+	}
+
+	// The llvm-mingw headers, when the cross compilers are available.
+	for _, tc := range []struct {
+		cc, goarch, src string
+	}{
+		{"x86_64-w64-mingw32-clang", "amd64", "#include <limits.h>\n#include <intrin.h>\n#include <immintrin.h>\n#include <windows.h>\n#include <winsock2.h>\n#include <ws2tcpip.h>\n"},
+		{"i686-w64-mingw32-clang", "386", "#include <limits.h>\n#include <intrin.h>\n#include <immintrin.h>\n#include <windows.h>\n"},
+		{"aarch64-w64-mingw32-clang", "arm64", "#include <limits.h>\n#include <intrin.h>\n#include <windows.h>\n#include <winsock2.h>\n#include <ws2tcpip.h>\n"},
+	} {
+		if _, err := exec.LookPath(tc.cc); err != nil {
+			t.Logf("windows/%s: %v", tc.goarch, err)
+			continue
+		}
+
+		t.Setenv("CC", tc.cc)
+		cfg, err := NewConfig("windows", tc.goarch)
+		if err != nil {
+			t.Errorf("windows/%s: %v", tc.goarch, err)
+			continue
+		}
+
+		ast, err := Translate(cfg, []Source{
+			{Name: "<predefined>", Value: cfg.Predefined},
+			{Name: "<builtin>", Value: Builtin},
+			{Name: "test.c", Value: tc.src + "int main(void) { return 0; }\n"},
+		})
+		if err != nil {
+			t.Errorf("windows/%s: %v", tc.goarch, err)
+			continue
+		}
+
+		// mingw's <limits.h>, reached via clang's __has_include_next, defines it.
+		if ast.Macros["PATH_MAX"] == nil {
+			t.Errorf("windows/%s: PATH_MAX not defined", tc.goarch)
+		}
+	}
+}

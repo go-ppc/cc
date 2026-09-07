@@ -82,6 +82,7 @@ typedef void *__builtin_va_list;
 
 #define __builtin_offsetof(type, member) ((__SIZE_TYPE__)&(((type*)0)->member))
 #define __builtin_types_compatible_p(t1, t2) __ccgo__types_compatible_p((t1){}, (t2){})
+#define __builtin_bit_cast(type, expr) (((union { __typeof__(expr) __ccgo_from; type __ccgo_to; }){ .__ccgo_from = (expr) }).__ccgo_to)
 
 int __predefined_declarator;
 
