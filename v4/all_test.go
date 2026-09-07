@@ -3831,3 +3831,129 @@ int positive;
 		}
 	}
 }
+
+// testInitializer returns the initializer of the file scope object nm.
+func testInitializer(ast *AST, nm string) *Initializer {
+	for tu := ast.TranslationUnit; tu != nil; tu = tu.TranslationUnit {
+		ed := tu.ExternalDeclaration
+		if ed == nil || ed.Case != ExternalDeclarationDecl {
+			continue
+		}
+
+		for l := ed.Declaration.InitDeclaratorList; l != nil; l = l.InitDeclaratorList {
+			if id := l.InitDeclarator; id.Declarator.Name() == nm {
+				return id.Initializer
+			}
+		}
+	}
+	return nil
+}
+
+// testInitializerLeaves returns "offset:value:len" for every expression
+// initializer within n, in source order.
+func testInitializerLeaves(n *Initializer, a *[]string) {
+	switch n.Case {
+	case InitializerExpr:
+		var v interface{} = n.Value()
+		switch x := v.(type) {
+		case Int64Value:
+			v = int64(x)
+		case UInt64Value:
+			v = uint64(x)
+		}
+		*a = append(*a, fmt.Sprintf("%d:%v:%d", n.Offset(), v, n.Len()))
+	case InitializerInitList:
+		for l := n.InitializerList; l != nil; l = l.InitializerList {
+			testInitializerLeaves(l.Initializer, a)
+		}
+	}
+}
+
+func TestIssue167(t *testing.T) {
+	// https://gitlab.com/cznic/cc/-/issues/167
+	const src = `
+typedef unsigned short uint16_t;
+typedef unsigned char uint8_t;
+typedef union { uint16_t cache; struct { uint8_t code; uint8_t arg; } op; } CodeUnit;
+static const CodeUnit insts[] = {
+	{ .op.code = 1, .op.arg = 2 },
+	{ .op.code = 3, .op.arg = 4 },
+};
+struct S { CodeUnit u; int i; };
+struct S s = { .u.op.code = 5, .u.op.arg = 6, .i = 7 };
+CodeUnit b[] = { [0].op.code = 1, [1].op.arg = 2 };
+int a2[][3] = { [1][2] = 5 };
+int r[] = { [0 ... 3] = 1, 2 };
+int r2[8] = { [0 ... 3] = 1, 2 };
+struct R3 { int x; } r3[8] = { [1][2] = 1 };
+`
+	cfg := defaultCfg()
+	_, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "test.c", Value: src},
+	})
+	if err == nil {
+		t.Fatal("expected an error for r3")
+	}
+
+	if !strings.Contains(err.Error(), "test.c:15:") || !strings.Contains(err.Error(), "expected field name") || strings.Contains(err.Error(), "MISSING") {
+		t.Fatal(err)
+	}
+
+	ast, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "test.c", Value: strings.Replace(src, "struct R3 { int x; } r3[8] = { [1][2] = 1 };\n", "", 1)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		nm     string
+		leaves string
+		len    int64
+	}{
+		{"insts", "0:1:1 1:2:1 2:3:1 3:4:1", 2},
+		{"s", "0:5:1 1:6:1 4:7:1", -1},
+		{"b", "0:1:1 3:2:1", 2},
+		{"a2", "20:5:1", 2},
+		{"r", "0:1:4 16:2:1", 5},
+		{"r2", "0:1:4 16:2:1", 8},
+	} {
+		in := testInitializer(ast, tc.nm)
+		if in == nil {
+			t.Errorf("%s: initializer not found", tc.nm)
+			continue
+		}
+
+		var a []string
+		testInitializerLeaves(in, &a)
+		if g, e := strings.Join(a, " "), tc.leaves; g != e {
+			t.Errorf("%s: got leaves %q, want %q", tc.nm, g, e)
+		}
+		if tc.len < 0 {
+			continue
+		}
+
+		x, ok := ast.Scope.Nodes[tc.nm][0].(*Declarator).Type().(*ArrayType)
+		if !ok {
+			t.Errorf("%s: not an array", tc.nm)
+			continue
+		}
+
+		if g, e := x.Len(), tc.len; g != e {
+			t.Errorf("%s: got len %v, want %v", tc.nm, g, e)
+		}
+	}
+
+	// Both items of a union initializer list select the same member.
+	for i, l := 0, testInitializer(ast, "insts").InitializerList; l != nil; i, l = i+1, l.InitializerList {
+		for m := l.Initializer.InitializerList; m != nil; m = m.InitializerList {
+			if f := m.UnionField(); f == nil || f.Name() != "op" {
+				t.Errorf("insts[%d]: union field %v, want op", i, f)
+			}
+		}
+	}
+}

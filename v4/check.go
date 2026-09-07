@@ -1644,13 +1644,21 @@ func (n *InitializerList) checkArray(c *ctx, currObj Type, t *ArrayType, off int
 				return nil
 			}
 
-			if dl.DesignatorList == nil {
-				continue
+			switch {
+			case hi < 0:
+				n.Initializer.nelems = 1
+			default:
+				n.Initializer.nelems = hi - lo + 1
 			}
 
-			n = n.checkDesignatorList(dl, c, elemT, off+lo*elemT.Size(), hi >= 0)
-			lo = mathutil.MaxInt64(lo, hi)
-			lo++
+			switch {
+			case dl.DesignatorList == nil:
+				n = n.Initializer.check(c, currObj, elemT, off+lo*elemT.Size(), n, nil)
+			default:
+				n = n.checkDesignatorList(dl.DesignatorList, c, elemT, off+lo*elemT.Size(), hi >= 0)
+			}
+			lo = mathutil.MaxInt64(lo, hi) + 1
+			t.elems = mathutil.MaxInt64(t.elems, lo)
 		}
 		return nil
 	default:
@@ -1696,12 +1704,13 @@ func (n *InitializerList) checkArray(c *ctx, currObj Type, t *ArrayType, off int
 				n.Initializer.nelems = hi - lo + 1
 			}
 
-			if dl.DesignatorList == nil {
-				continue
+			switch {
+			case dl.DesignatorList == nil:
+				n = n.Initializer.check(c, currObj, elemT, off+lo*elemT.Size(), n, nil)
+			default:
+				n = n.checkDesignatorList(dl.DesignatorList, c, elemT, off+lo*elemT.Size(), hi >= 0)
 			}
-
-			n = n.checkDesignatorList(dl.DesignatorList, c, elemT, off+lo*elemT.Size(), hi >= 0)
-			lo++
+			lo = mathutil.MaxInt64(lo, hi) + 1
 		}
 		return nil
 	}
@@ -1788,33 +1797,46 @@ func (n *InitializerList) checkUnion(c *ctx, currObj Type, t *UnionType, off int
 		return n
 	}
 
-	n0 := n
-	dl := n.Designation.DesignatorList
-	n2 := *n
-	n2.Designation = nil
-	n = &n2
-	nm := dl.Designator.name(c)
-	if nm == "" {
-		return nil
-	}
+	// [0]6.7.9/17: Each brace-enclosed initializer list has an associated
+	// current object. ... a designation causes the following initializer to
+	// begin initialization of the subobject described by the designator.
+	//
+	// Every designated initializer in the list thus selects a subobject of the
+	// union anew, so several of them can address the same member, typically
+	// the fields of a struct member:
+	//
+	//	union { unsigned short cache; struct { unsigned char code, arg; } op; } u = { .op.code = 1, .op.arg = 2 };
+	for n != nil && n.Designation != nil {
+		n0 := n
+		dl := n.Designation.DesignatorList
+		n2 := *n
+		n2.Designation = nil
+		n = &n2
+		nm := dl.Designator.name(c)
+		if nm == "" {
+			return nil
+		}
 
-	if f = t.FieldByName(nm); f == nil {
-		c.errors.add(errorf("%v: %v has no member %v", n.Position(), t, nm))
-		return nil
-	}
+		if f = t.FieldByName(nm); f == nil {
+			c.errors.add(errorf("%v: %v has no member %v", n.Position(), t, nm))
+			return nil
+		}
 
-	if p := f.Parent(); p != nil {
-		f = p
-		n = n0
-	}
+		if p := f.Parent(); p != nil {
+			f = p
+			n = n0
+		}
 
-	n0.unionField = f
-	dl.Designator.typ = f.Type()
-	if dl.DesignatorList == nil {
-		return n.Initializer.check(c, f.Type(), f.Type(), off+f.Offset(), n, f)
+		n0.unionField = f
+		dl.Designator.typ = f.Type()
+		switch {
+		case dl.DesignatorList == nil:
+			n = n.Initializer.check(c, f.Type(), f.Type(), off+f.Offset(), n, f)
+		default:
+			n = n.checkDesignatorList(dl.DesignatorList, c, f.Type(), off+f.Offset(), false)
+		}
 	}
-
-	return n.checkDesignatorList(dl.DesignatorList, c, f.Type(), off+f.Offset(), false)
+	return n
 }
 
 func (n *Designator) name(c *ctx) string {
@@ -1823,7 +1845,7 @@ func (n *Designator) name(c *ctx) string {
 		DesignatorIndex,  // '[' ConstantExpression ']'
 		DesignatorIndex2: // '[' ConstantExpression "..." ConstantExpression ']'
 
-		c.errors.add(errorf("%v: expected field name"))
+		c.errors.add(errorf("%v: expected field name", n.Position()))
 	case DesignatorField: // '.' IDENTIFIER
 		return n.Token2.SrcStr()
 	case DesignatorField2: // IDENTIFIER ':'
@@ -1840,7 +1862,7 @@ func (n *Designator) index(c *ctx) (lo, hi int64) {
 		lo = arrayIndex(c, n.ConstantExpression)
 		hi = arrayIndex(c, n.ConstantExpression2)
 		if lo < 0 {
-			c.errors.add(errorf("%v: array indices cannot be negative"))
+			c.errors.add(errorf("%v: array indices cannot be negative", n.Position()))
 			return -1, -1
 		}
 
@@ -1849,12 +1871,12 @@ func (n *Designator) index(c *ctx) (lo, hi int64) {
 		lo = arrayIndex(c, n.ConstantExpression)
 		hi = arrayIndex(c, n.ConstantExpression2)
 		if lo < 0 || hi < 0 {
-			c.errors.add(errorf("%v: array indices cannot be negative"))
+			c.errors.add(errorf("%v: array indices cannot be negative", n.Position()))
 			return -1, -1
 		}
 
 		if lo >= 0 && hi >= 0 && lo >= hi {
-			c.errors.add(errorf("%v: first index shall be smaller than second index"))
+			c.errors.add(errorf("%v: first index shall be smaller than second index", n.Position()))
 			return -1, -1
 		}
 
@@ -1862,7 +1884,7 @@ func (n *Designator) index(c *ctx) (lo, hi int64) {
 	case
 		DesignatorField,  // '.' IDENTIFIER
 		DesignatorField2: // IDENTIFIER ':'
-		c.errors.add(errorf("%v: expected bracketed array index"))
+		c.errors.add(errorf("%v: expected bracketed array index", n.Position()))
 	}
 	return -1, -1
 }
@@ -1979,7 +2001,7 @@ func (n *InitializerList) checkDesignatorList(dl *DesignatorList, c *ctx, currOb
 				ranged = true
 			}
 		default:
-			c.errors.add(errorf("internal error: %T", x))
+			c.errors.add(errorf("%v: designator into %s, expected a struct, union or array", dl.Designator.Position(), t))
 			return nil
 		}
 	}
