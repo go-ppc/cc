@@ -271,19 +271,24 @@ func stringConst(eh errHandler, tok Token) string {
 	panic(todo("internal error"))
 }
 
-func charConst(eh errHandler, tok Token) rune {
+// charConst returns the value of the character constant tok. isByte reports
+// whether tok is a narrow character constant denoting a single byte, ie. one
+// containing a single character or an escape sequence other than an universal
+// character name. Such a constant has the value of a char before the promotion
+// to int.
+func charConst(eh errHandler, tok Token) (r rune, isByte bool) {
 	s := tok.SrcStr()
 	switch tok.Ch {
 	case rune(LONGCHARCONST):
 		s = s[1:] // Remove leading 'L'.
 		fallthrough
 	case rune(CHARCONST):
+		isByte = tok.Ch == rune(CHARCONST)
 		s = s[1 : len(s)-1] // Remove outer 's.
 		if len(s) == 1 {
-			return rune(s[0])
+			return rune(s[0]), isByte
 		}
 
-		var r rune
 		var n int
 		switch s[0] {
 		case '\\':
@@ -291,15 +296,36 @@ func charConst(eh errHandler, tok Token) rune {
 			if r < 0 {
 				r = -r
 			}
+			if len(s) > 1 && (s[1] == 'u' || s[1] == 'U') {
+				isByte = false
+			}
 		default:
 			r, n = utf8.DecodeRuneInString(s)
+			isByte = false
 		}
 		if n != len(s) {
 			eh("%v: invalid character constant", tok.Position())
 		}
-		return r
+		return r, isByte
 	}
 	panic(todo("internal error"))
+}
+
+// charConstValue returns the value of the integer character constant tok.
+//
+// [0]6.4.4.4/10: If an integer character constant contains a single character
+// or escape sequence, its value is the one that results when an object with
+// type char whose value is that of the single character or escape sequence is
+// converted to type int. Where char is signed '\x80' is thus -128 and '\xff'
+// is -1, as in gcc and clang. Wide character constants keep the value of the
+// wide character.
+func charConstValue(eh errHandler, abi *ABI, tok Token) int64 {
+	r, isByte := charConst(eh, tok)
+	if isByte && r >= 0x80 && r <= 0xff && abi != nil && abi.SignedChar {
+		return int64(int8(r))
+	}
+
+	return int64(r)
 }
 
 // escape-sequence		{simple-sequence}|{octal-escape-sequence}|{hexadecimal-escape-sequence}|{universal-character-name}

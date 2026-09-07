@@ -2685,11 +2685,7 @@ func (c *cpp) primaryExpression(s *cppTokens, eval bool) interface{} {
 	switch t := s.token(); t.Ch {
 	case rune(CHARCONST), rune(LONGCHARCONST):
 		s.shift()
-		r := charConst(c.eh, t)
-		if r < 0 {
-			r = -r
-		}
-		return int64(r)
+		return charConstValue(c.eh, c.cfg.ABI, t)
 	case rune(IDENTIFIER):
 		s.shift()
 		switch t.SrcStr() {

@@ -5272,10 +5272,9 @@ func (n *PrimaryExpression) charConst(c *ctx) (v Value, t Type) {
 		n.typ = c.wcharT(n)
 		fallthrough
 	case PrimaryExpressionChar:
-		r := charConst(func(msg string, args ...interface{}) {
+		n.val = Int64Value(charConstValue(func(msg string, args ...interface{}) {
 			c.errors.add(errorf(msg, args...))
-		}, n.Token)
-		n.val = Int64Value(r)
+		}, c.ast.ABI, n.Token))
 	default:
 		c.errors.add(errorf("TODO %v", n.Case))
 	}

@@ -3771,3 +3771,63 @@ int m = sizeof(a);
 		t.Error(err)
 	}
 }
+
+func TestIssue166(t *testing.T) {
+	// https://gitlab.com/cznic/cc/-/issues/166
+	const src = `
+enum opcode { PROTO = '\x80', FRAME = '\x95', FILL = '\xff', OCT = '\200', A = 'a', W = L'\x80', W2 = L'\xff' };
+#if '\x80' < 0
+int negative;
+#else
+int positive;
+#endif
+`
+	for _, signedChar := range []bool{true, false} {
+		cfg := defaultCfg()
+		abi := *cfg.ABI
+		abi.SignedChar = signedChar
+		cfg.ABI = &abi
+		ast, err := Translate(cfg, []Source{
+			{Name: "<predefined>", Value: cfg.Predefined},
+			{Name: "<builtin>", Value: Builtin},
+			{Name: "test.c", Value: src},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		exp := map[string]int64{"PROTO": 128, "FRAME": 149, "FILL": 255, "OCT": 128, "A": 'a', "W": 128, "W2": 255}
+		declared, undeclared := "positive", "negative"
+		if signedChar {
+			exp["PROTO"], exp["FRAME"], exp["FILL"], exp["OCT"] = -128, -107, -1, -128
+			declared, undeclared = "negative", "positive"
+		}
+		for nm, e := range exp {
+			en, ok := ast.Scope.Nodes[nm][0].(*Enumerator)
+			if !ok {
+				t.Errorf("signed char %v: %s: not an enumerator", signedChar, nm)
+				continue
+			}
+
+			var g int64
+			switch x := en.Value().(type) {
+			case Int64Value:
+				g = int64(x)
+			case UInt64Value:
+				g = int64(x)
+			default:
+				t.Errorf("signed char %v: %s: unexpected value %T(%[3]v)", signedChar, nm, x)
+				continue
+			}
+			if g != e {
+				t.Errorf("signed char %v: %s: got %v, want %v", signedChar, nm, g, e)
+			}
+		}
+		if _, ok := ast.Scope.Nodes[declared]; !ok {
+			t.Errorf("signed char %v: #if '\\x80' < 0 evaluated wrongly, %q not declared", signedChar, declared)
+		}
+		if _, ok := ast.Scope.Nodes[undeclared]; ok {
+			t.Errorf("signed char %v: #if '\\x80' < 0 evaluated wrongly, %q declared", signedChar, undeclared)
+		}
+	}
+}
