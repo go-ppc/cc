@@ -494,10 +494,21 @@ func (p *parser) declarationListOpt() (r *DeclarationList) {
 // When declOK is set and a declaration follows the label, the label gets an
 // empty statement and the declaration is left to be parsed as the next block
 // item, as if the source read 'label: ; declaration'.
+//
+// GNU attribute specifiers may follow the colon, gcc and clang bind them to
+// the label:
+//
+//	fail: __attribute__((unused)) free(p);
+//
+// Whether a declaration follows is decided by the first token after any such
+// attribute specifiers. The attributes themselves are not consumed here, they
+// stay with whatever they precede: the expression statement or the
+// declaration parsed as the next block item.
 func (p *parser) labeledStatementBody(declOK bool, colon Token) *Statement {
 	if declOK {
-		switch ch := p.rune(true); {
-		case ch == rune(TYPENAME) && p.peek(1, false).Ch == ':':
+		i := p.skipAttributeSpecifiers(0)
+		switch ch := p.peek(i, true).Ch; {
+		case ch == rune(TYPENAME) && p.peek(i+1, false).Ch == ':':
 			// Another label, named like a typedef.
 		case p.isDeclarationSpecifier(ch, true), ch == rune(STATICASSERT), ch == rune(AUTOTYPE):
 			t := colon
@@ -508,6 +519,30 @@ func (p *parser) labeledStatementBody(declOK bool, colon Token) *Statement {
 		p.labelDeclOK = true // A label may follow: 'a: b: int x;'.
 	}
 	return p.statement(false)
+}
+
+// skipAttributeSpecifiers returns the index of the first lookahead token, at
+// or after lookahead index i, that is not part of an attribute specifier.
+// Nothing is consumed.
+func (p *parser) skipAttributeSpecifiers(i int) int {
+	for p.peek(i, false).Ch == rune(ATTRIBUTE) {
+		if p.peek(i+1, false).Ch != '(' {
+			return i // Malformed, left for the parser to report.
+		}
+
+		i += 2 // __attribute__ (
+		for depth := 1; depth != 0; i++ {
+			switch p.peek(i, false).Ch {
+			case '(':
+				depth++
+			case ')':
+				depth--
+			case eof:
+				return i
+			}
+		}
+	}
+	return i
 }
 
 // [0], 6.8.2 Compound statement
@@ -974,7 +1009,7 @@ func (p *parser) iterationStatement() (r *IterationStatement) {
 func (p *parser) expressionStatement() *ExpressionStatement {
 	switch p.rune(false) {
 	case rune(ATTRIBUTE):
-		p.attributeSpecifier() // Not supported yet, ignored.
+		p.attributeSpecifierListOpt() // Not supported yet, ignored.
 		fallthrough
 	default:
 		return &ExpressionStatement{ExpressionList: p.expression(true), Token: p.must(';')}

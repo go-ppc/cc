@@ -4387,3 +4387,86 @@ struct S18 { int x; union { int u; struct { char c1, c2; } cs; }; int w; } s18 =
 		}
 	}
 }
+
+func TestLabelAttributes(t *testing.T) {
+	// GNU attribute specifiers after the colon of a label bind to the label
+	// (gcc, clang). What follows them is a statement or, where a block item
+	// is expected, a declaration. libX11 src/xcms/LRGB.c has
+	//
+	//	FreeBlueTblElements: _X_UNUSED
+	//	    Xfree(pScreenData->pBlueTbl->pBase);
+	//
+	// with _X_UNUSED being __attribute__((__unused__)).
+	const src = `
+typedef int T;
+void g(int *);
+int f(int *p) {
+	if (!p) goto a;
+	if (p) m: __attribute__((unused)) g(p);
+a: __attribute__((unused)) g(p);
+b: __attribute__((unused)) __attribute__((cold)) g(p);
+c: __attribute__((unused));
+d: __attribute__((unused)) T *q = p;
+e: __attribute__((unused)) __attribute__((cold)) static T *r = 0;
+	r = q;
+	return *r;
+}
+`
+	cfg := defaultCfg()
+	ast, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "test.c", Value: src},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]string{}
+	declared := map[string]bool{}
+	testWalk(ast.TranslationUnit, func(n Node) {
+		switch x := n.(type) {
+		case *Declarator:
+			declared[x.Name()] = true
+		case *LabeledStatement:
+			nm := x.Token.SrcStr()
+			s := x.Statement
+			switch {
+			case s == nil:
+				got[nm] = "nil"
+			case s.Case != StatementExpr:
+				got[nm] = s.Case.String()
+			case s.ExpressionStatement.ExpressionList == nil:
+				got[nm] = "empty"
+			default:
+				got[nm] = NodeSource(s.ExpressionStatement.ExpressionList)
+			}
+		}
+	})
+	exp := map[string]string{
+		"m": "g(p)",
+		"a": "g(p)",
+		"b": "g(p)",
+		"c": "empty",
+		"d": "empty",
+		"e": "empty",
+	}
+	if g, e := fmt.Sprint(got), fmt.Sprint(exp); g != e {
+		t.Errorf("got %v\nwant %v", g, e)
+	}
+	for _, nm := range []string{"q", "r"} {
+		if !declared[nm] {
+			t.Errorf("declaration of %s not found", nm)
+		}
+	}
+
+	// Where a statement is required, label attributes cannot be followed by
+	// a declaration.
+	if _, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "test.c", Value: "int g(int x) { if (x) l: __attribute__((unused)) int y = 1; return 0; }\n"},
+	}); err == nil {
+		t.Fatal("got nil, want an error")
+	}
+}
