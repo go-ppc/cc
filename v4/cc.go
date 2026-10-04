@@ -782,6 +782,14 @@ type Config struct {
 	IgnoreNegativeShiftAmounts bool
 	// Ignore _Static_assert
 	IgnoreStaticAssert bool
+	// HasBuiltin, when not nil, decides the __has_builtin preprocessor
+	// operator: it is called with the operand and reports whether the consumer
+	// of this package can translate a call to that builtin. A back end that
+	// implements only some builtins should set it, because C code commonly
+	// selects a builtin with __has_builtin and falls back to plain C
+	// otherwise. When nil, __has_builtin reports 1 for every name starting
+	// with __builtin_, __sync_ or __c11_atomic_ and 0 for any other.
+	HasBuiltin func(name string) bool
 
 	doNotInjectFunc        bool // testing
 	fakeIncludes           bool // testing

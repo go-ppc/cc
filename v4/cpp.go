@@ -840,9 +840,12 @@ func (c *cpp) parseHasFeature(ts tokenSequence, kind string) (r tokenSequence) {
 			supported = true
 		}
 	case "__has_builtin":
-		// Match Clang's C11 atomic builtins, plus common GCC fallbacks
-		if strings.HasPrefix(nm, "__c11_atomic_") || strings.HasPrefix(nm, "__sync_") || strings.HasPrefix(nm, "__builtin_") {
-			supported = true
+		switch {
+		case c.cfg != nil && c.cfg.HasBuiltin != nil:
+			supported = c.cfg.HasBuiltin(nm)
+		default:
+			// Match Clang's C11 atomic builtins, plus common GCC fallbacks
+			supported = strings.HasPrefix(nm, "__c11_atomic_") || strings.HasPrefix(nm, "__sync_") || strings.HasPrefix(nm, "__builtin_")
 		}
 	}
 

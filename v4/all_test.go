@@ -4470,3 +4470,44 @@ e: __attribute__((unused)) __attribute__((cold)) static T *r = 0;
 		t.Fatal("got nil, want an error")
 	}
 }
+
+// TestHasBuiltin checks that Config.HasBuiltin decides __has_builtin, and that
+// without it every __builtin_ name is reported as present.
+func TestHasBuiltin(t *testing.T) {
+	const src = `
+#if __has_builtin(__builtin_ok)
+ok_yes
+#else
+ok_no
+#endif
+#if __has_builtin(__builtin_elementwise_sqrt)
+esqrt_yes
+#else
+esqrt_no
+#endif
+#if __has_builtin(plain)
+plain_yes
+#else
+plain_no
+#endif
+`
+	for _, test := range []struct {
+		hook func(string) bool
+		want []string
+	}{
+		{nil, []string{"ok_yes", "esqrt_yes", "plain_no"}},
+		{func(nm string) bool { return nm == "__builtin_ok" || nm == "plain" }, []string{"ok_yes", "esqrt_no", "plain_yes"}},
+	} {
+		cfg := defaultCfg()
+		cfg.HasBuiltin = test.hook
+		var b strings.Builder
+		if err := Preprocess(cfg, []Source{{Name: "test.c", Value: src}}, &b); err != nil {
+			t.Fatal(err)
+		}
+
+		got := strings.Fields(b.String())
+		if g, e := strings.Join(got, " "), strings.Join(test.want, " "); g != e {
+			t.Errorf("hook set %v: got %q, want %q", test.hook != nil, g, e)
+		}
+	}
+}
