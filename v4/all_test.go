@@ -2538,6 +2538,38 @@ func TestFixArgs(t *testing.T) {
 			want: []string{"-mlong-double-64", "-E"},
 			ok:   false,
 		},
+		{
+			// clang quotes -mno-sse4 under its canonical name.
+			name: "clang canonical name",
+			args: []string{"-mno-sse", "-mno-sse4", "-E"},
+			msg:  "clang: error: unsupported option '-mno-sse4.1' for target 'arm64-apple-darwin27.0.0'",
+			want: []string{"-mno-sse", "-E"},
+			ok:   true,
+		},
+		{
+			// Both -mno-sse4 and -mno-sse4.1 are reported as '-mno-sse4.1';
+			// the exact match goes first, the next probe drops the other.
+			name: "clang canonical name, exact match first",
+			args: []string{"-mno-sse4", "-mno-sse4.1", "-E"},
+			msg:  "clang: error: unsupported option '-mno-sse4.1' for target 'arm64-apple-darwin27.0.0'\nclang: error: unsupported option '-mno-sse4.1' for target 'arm64-apple-darwin27.0.0'",
+			want: []string{"-mno-sse4", "-E"},
+			ok:   true,
+		},
+		{
+			name: "quoted flag extends no arg",
+			args: []string{"-E"},
+			msg:  "clang: error: unsupported option '-mno-sse4.1' for target 'arm64-apple-darwin27.0.0'",
+			want: []string{"-E"},
+			ok:   false,
+		},
+		{
+			// The suggestion names a flag that was passed and is fine.
+			name: "clang suggestion is not a rejection",
+			args: []string{"-mno-abm", "-mno-tbm", "-E"},
+			msg:  "clang: error: unknown argument '-mno-abm'; did you mean '-mno-tbm'?",
+			want: []string{"-mno-tbm", "-E"},
+			ok:   true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := append([]string(nil), tc.args...)
@@ -2548,6 +2580,51 @@ func TestFixArgs(t *testing.T) {
 				t.Errorf("args = %q, want %q", g, e)
 			}
 		})
+	}
+}
+
+// TestNewConfigCanonicalFlag checks that newConfig survives a compiler that
+// rejects a flag under another name, like clang on an arm64 host, which
+// reports -mno-sse4 as '-mno-sse4.1': the probe is retried until the compiler
+// accepts the remaining flags.
+func TestNewConfigCanonicalFlag(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SKIP: needs a shell script as the compiler")
+	}
+
+	cc := filepath.Join(t.TempDir(), "cc")
+	const script = `#!/bin/sh
+rc=0
+for a in "$@"; do
+	case $a in
+	-mno-sse4) echo "clang: error: unsupported option '-mno-sse4.1' for target 'arm64-apple-darwin27.0.0'" >&2; rc=1;;
+	-mno-*) echo "clang: error: unsupported option '$a' for target 'arm64-apple-darwin27.0.0'" >&2; rc=1;;
+	esac
+done
+[ $rc = 0 ] || exit $rc
+case " $* " in
+*" -dM "*) echo "#define __STDC__ 1";;
+*" -v "*) echo "#include <...> search starts here:"; echo " /usr/include"; echo "End of search list.";;
+esac
+`
+	if err := os.WriteFile(cc, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("CC", cc)
+	gotCC, predefined, _, sysIncludePaths, _, err := newConfig([]string{"-D__CCGO__", "-mno-sse", "-mno-sse4", "-mno-sse4.1", "-mno-sse4.2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if gotCC != cc {
+		t.Errorf("cc = %q, want %q", gotCC, cc)
+	}
+	if g, e := predefined, "#define __STDC__ 1"; g != e {
+		t.Errorf("predefined = %q, want %q", g, e)
+	}
+	if g, e := sysIncludePaths, []string{"/usr/include"}; !reflect.DeepEqual(g, e) {
+		t.Errorf("sysIncludePaths = %q, want %q", g, e)
 	}
 }
 

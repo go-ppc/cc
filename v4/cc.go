@@ -445,65 +445,46 @@ func (c *Config) AdjustLongDouble() error {
 	return nil
 }
 
+// fixArgs drops from args the flags that msg, the diagnostic of a failed
+// compiler run, rejects and reports whether it dropped any. Compilers quote
+// the offending flag no matter how they phrase the rejection: gcc says
+// "unrecognized command-line option '-mlong-double-64'", clang "unknown
+// argument: '-mlong-double-64'" or, on arm64 hosts (darwin/arm64,
+// windows/arm64, openbsd/arm64), "unsupported option '-mlong-double-64' for
+// target '...'". They delimit it with straight ('...') or, for GCC, curly
+// (‘...’) quotes.
+//
+// A compiler may quote a flag under its canonical name: clang reports
+// -mno-sse4 as '-mno-sse4.1'. A quoted flag that was not passed therefore
+// drops the longest passed flag it extends. Clang's "did you mean '...'?"
+// suggestions are ignored; they name flags, not rejections.
 func fixArgs(args *[]string, msg string) (r bool) {
-	tags := []string{
-		"unknown argument",
-		"unrecognized command-line option",
-	}
-	a := strings.Split(strings.TrimSpace(msg), "\n")
-	var (
-		m      map[string]struct{}
-		x      int
-		lenTag int
-	)
-	for _, v := range a {
-		for _, tag := range tags {
-			lenTag = len(tag)
-			x = strings.Index(v, tag)
-			if x >= 0 {
-				break
-			}
-		}
-		if x < 0 {
-			continue
-		}
-
-		v = v[x+lenTag:]
-		v = strings.TrimPrefix(v, ":")
-		v = strings.TrimSpace(v)
-		if !strings.HasPrefix(v, "'") {
-			continue
-		}
-
-		v = v[1:]
-		if x = strings.Index(v, "'"); x > 0 {
-			v = v[:x]
-			if m == nil {
-				m = map[string]struct{}{}
-			}
-			m[v] = struct{}{}
-		}
-	}
-
-	// Catch-all for wordings the tags above miss. Compilers quote the offending
-	// flag no matter how they phrase the rejection, e.g. clang on arm64 hosts
-	// (darwin/arm64, windows/arm64, openbsd/arm64) says "unsupported option
-	// '-mlong-double-64' for target '...'". If the failing diagnostic quotes a
-	// flag we actually passed, drop it. Compilers delimit it with straight
-	// ('...') or, for GCC, curly (‘...’) quotes.
+	passed := map[string]struct{}{}
 	for _, v := range *args {
-		if strings.Contains(msg, "'"+v+"'") || strings.Contains(msg, "‘"+v+"’") {
-			if m == nil {
-				m = map[string]struct{}{}
+		passed[v] = struct{}{}
+	}
+	m := map[string]struct{}{}
+	for _, q := range quotedFlags(msg) {
+		if _, ok := passed[q]; ok {
+			m[q] = struct{}{}
+			continue
+		}
+
+		best := ""
+		for _, v := range *args {
+			if len(v) > len(best) && strings.HasPrefix(q, v) {
+				best = v
 			}
-			m[v] = struct{}{}
+		}
+		if best != "" {
+			m[best] = struct{}{}
 		}
 	}
 	if len(m) == 0 {
 		return false
 	}
 
-	a = a[:0]
+	a := make([]string, 0, len(*args))
 	for _, v := range *args {
 		if _, ok := m[v]; ok {
 			r = true
@@ -513,7 +494,39 @@ func fixArgs(args *[]string, msg string) (r bool) {
 		a = append(a, v)
 	}
 	*args = a
-	return true
+	return r
+}
+
+// quotedFlags returns the flags, quoted strings starting with a dash, that
+// the lines of a compiler diagnostic msg quote, in straight or curly quotes
+// and without the "did you mean" suggestions.
+func quotedFlags(msg string) (r []string) {
+	for _, line := range strings.Split(msg, "\n") {
+		if x := strings.Index(line, "did you mean"); x >= 0 {
+			line = line[:x]
+		}
+		for _, q := range [][2]string{{"'", "'"}, {"‘", "’"}} {
+			s := line
+			for {
+				x := strings.Index(s, q[0]+"-")
+				if x < 0 {
+					break
+				}
+
+				s = s[x+len(q[0]):]
+				y := strings.Index(s, q[1])
+				if y < 0 {
+					break
+				}
+
+				if flag := s[:y]; !strings.ContainsAny(flag, " \t") {
+					r = append(r, flag)
+				}
+				s = s[y+len(q[1]):]
+			}
+		}
+	}
+	return r
 }
 
 // lookPath wraps exec.LookPath and additionally handles MSYS / git-bash style
