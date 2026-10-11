@@ -4588,3 +4588,59 @@ plain_no
 		}
 	}
 }
+
+// TestAtomicParameter checks that _Atomic, a type qualifier (C11 6.7.3) like
+// const and volatile, is accepted in a parameter declaration, named or not,
+// in its qualifier and in its specifier form, and that the declarator records
+// it. sqlite-multiwriter has
+//
+//	static inline int mw_knob_int (_Atomic int *cache, const char *name, int dflt)
+//
+// which was rejected with "invalid specifier(s) for parameter".
+func TestAtomicParameter(t *testing.T) {
+	const src = `
+int f(_Atomic int *p, _Atomic(long) *q, _Atomic int x);
+int g(_Atomic int *, _Atomic(long) *, _Atomic int);
+int f(_Atomic int *p, _Atomic(long) *q, _Atomic int x) { return *p + *q + x; }
+int h(const int *r) { return *r; }
+`
+	cfg := defaultCfg()
+	ast, err := Translate(cfg, []Source{
+		{Name: "<predefined>", Value: cfg.Predefined},
+		{Name: "<builtin>", Value: Builtin},
+		{Name: "test.c", Value: src},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]bool{}
+	testWalk(ast.TranslationUnit, func(n Node) {
+		if x, ok := n.(*ParameterDeclaration); ok && x.Declarator != nil && x.Position().Filename == "test.c" {
+			got[x.Declarator.Name()] = x.Declarator.IsAtomic()
+		}
+	})
+	exp := map[string]bool{"p": true, "q": true, "x": true, "r": false}
+	if g, e := fmt.Sprint(got), fmt.Sprint(exp); g != e {
+		t.Errorf("got %v\nwant %v", g, e)
+	}
+
+	// Storage classes, _Thread_local and _Alignas stay invalid there.
+	for _, s := range []string{
+		"int f(static int x);",
+		"int f(extern int x);",
+		"int f(auto int x);",
+		"int f(_Thread_local int x);",
+		"int f(_Alignas(8) int x);",
+		"int f(static int);",
+		"int f(_Thread_local int);",
+	} {
+		if _, err := Translate(cfg, []Source{
+			{Name: "<predefined>", Value: cfg.Predefined},
+			{Name: "<builtin>", Value: Builtin},
+			{Name: "test.c", Value: s + "\n"},
+		}); err == nil {
+			t.Errorf("%s: got nil, want an error", s)
+		}
+	}
+}

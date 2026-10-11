@@ -2347,12 +2347,16 @@ func (n *ParameterDeclaration) check(c *ctx) {
 	case ParameterDeclarationDecl: // DeclarationSpecifiers Declarator
 		n.Declarator.isParam = true
 		n.typ = n.Declarator.check(c, n.DeclarationSpecifiers.check(c, &isExtern, &isStatic, &isAtomic, &isThreadLocal, &isConst, &isVolatile, &isInline, &isRegister, &isAuto, &isNoreturn, &isRestrict, &alignas))
+		n.Declarator.isAtomic = isAtomic
 		n.Declarator.isConst = isConst
 		n.Declarator.isVolatile = isVolatile
 		n.Declarator.isRegister = isRegister
 		n.Declarator.isRestrict = isRestrict
 		n.Declarator.isNoreturn = isNoreturn
-		if isExtern || isStatic || isAtomic || isThreadLocal || isInline || isAuto || alignas != 0 {
+		// _Atomic is a type qualifier (C11 6.7.3) like const and volatile, so
+		// it may appear in a parameter declaration: in _Atomic int *p it
+		// qualifies the pointee.
+		if isExtern || isStatic || isThreadLocal || isInline || isAuto || alignas != 0 {
 			c.errors.add(errorf("%v: invalid specifier(s) for parameter: abc", n.Declarator.Position()))
 		}
 	case ParameterDeclarationAbstract: // DeclarationSpecifiers AbstractDeclarator
@@ -2361,7 +2365,7 @@ func (n *ParameterDeclaration) check(c *ctx) {
 		if n.AbstractDeclarator != nil {
 			n.AbstractDeclarator.typ = t
 		}
-		if isExtern || isStatic || isAtomic || isThreadLocal || isInline || isAuto || isNoreturn || alignas != 0 {
+		if isExtern || isStatic || isThreadLocal || isInline || isAuto || isNoreturn || alignas != 0 {
 			c.errors.add(errorf("%v: invalid specifier(s) for unnamed parameter", n.Position()))
 		}
 	default:
