@@ -3554,7 +3554,7 @@ func (p *parser) structOrUnionSpecifier() (r *StructOrUnionSpecifier) {
 			r.Token2 = p.shift(false)
 			r.StructDeclarationList = p.structDeclarationList()
 			r.Token3 = p.must('}')
-			r.AttributeSpecifierList = p.attributeSpecifierListOpt()
+			r.AttributeSpecifierList2 = p.attributeSpecifierListOpt()
 			return r
 		default:
 			r.Case = StructOrUnionSpecifierTag

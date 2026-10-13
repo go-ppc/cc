@@ -4644,3 +4644,96 @@ int h(const int *r) { return *r; }
 		}
 	}
 }
+
+// TestAlignmentRequests checks struct and union layouts that depend on
+// _Atomic, _Alignas and the aligned attribute against the values gcc 14.2
+// computes for i386 and x86_64. Before, a member's _Alignas and a trailing
+// aligned attribute were ignored, _Alignas(N) used the alignment of N's type,
+// an aligned attribute before a struct tag was lost, one after the closing
+// brace did not round the size up, and _Atomic did not raise the alignment.
+// sqlite-multiwriter (cznic/sqlite#260) shares a header of _Atomic uint64_t
+// members after _Atomic int32_t ones between processes, which on 386 ended up
+// 4-aligned, laid out unlike gcc and unusable for 64-bit atomics.
+func TestAlignmentRequests(t *testing.T) {
+	const src = `
+#define OFF(t, f, v) _Static_assert(__builtin_offsetof(t, f) == v, #t "." #f)
+#define ALIGN(t, v) _Static_assert(_Alignof(t) == v, "_Alignof(" #t ")")
+#define SIZE(t, v) _Static_assert(sizeof(t) == v, "sizeof(" #t ")")
+
+typedef _Atomic unsigned long long atomic_ull;
+typedef unsigned long long u64a __attribute__((aligned(8)));
+struct p2 { int a, b; };
+struct p3 { char c[3]; };
+struct p12 { int a, b, c; };
+
+// _Atomic aligns a type of 1, 2, 4 or 8 bytes to its size.
+ALIGN(long long, V(4, 8));
+ALIGN(_Atomic long long, 8);
+ALIGN(_Atomic(long long), 8);
+ALIGN(atomic_ull, 8);
+ALIGN(_Atomic double, 8);
+ALIGN(_Atomic struct p2, 8);
+ALIGN(_Atomic struct p3, 1);
+SIZE(_Atomic struct p3, 3);
+ALIGN(_Atomic struct p12, 4);
+ALIGN(_Atomic char, 1);
+ALIGN(_Atomic short, 2);
+ALIGN(_Atomic long long *, V(4, 8));
+struct a { unsigned long long pos; unsigned seg; _Atomic unsigned long long end; };
+OFF(struct a, end, 16); ALIGN(struct a, 8); SIZE(struct a, 24);
+struct i { unsigned seg; atomic_ull x; };
+OFF(struct i, x, 8); ALIGN(struct i, 8);
+struct j { unsigned seg; _Atomic(unsigned long long) x; };
+OFF(struct j, x, 8);
+struct q { int i; _Atomic double x; };
+OFF(struct q, x, 8);
+struct v { int i; _Atomic long long *p; long long y; };
+OFF(struct v, y, V(8, 16)); SIZE(struct v, V(16, 24));
+
+// _Alignas applies to every declarator of a member declaration, an aligned
+// attribute after the last declarator to that one only.
+struct b { unsigned long long pos; unsigned seg; _Alignas(8) unsigned long long end; };
+OFF(struct b, end, 16); ALIGN(struct b, 8); SIZE(struct b, 24);
+struct c { unsigned long long pos; unsigned seg; unsigned long long end __attribute__((aligned(8))); };
+OFF(struct c, end, 16); ALIGN(struct c, 8); SIZE(struct c, 24);
+struct d { unsigned seg; _Alignas(16) int x; };
+OFF(struct d, x, 16); ALIGN(struct d, 16); SIZE(struct d, 32);
+struct g { unsigned seg; u64a x; };
+OFF(struct g, x, 8); ALIGN(struct g, 8);
+struct k { unsigned seg; unsigned long long a, b __attribute__((aligned(16))); };
+OFF(struct k, a, V(4, 8)); OFF(struct k, b, 16); ALIGN(struct k, 16); SIZE(struct k, 32);
+struct m { unsigned seg; _Alignas(8) char c, d; };
+OFF(struct m, c, 8); OFF(struct m, d, 16); ALIGN(struct m, 8); SIZE(struct m, 24);
+struct y { char c; _Alignas(long long) char d; };
+OFF(struct y, d, V(4, 8));
+union w { int i; _Alignas(8) char c; };
+ALIGN(union w, 8); SIZE(union w, 8);
+
+// An aligned attribute of a struct or union definition, before the tag or
+// after the closing brace, raises the alignment and rounds the size up.
+struct __attribute__((aligned(8))) e { unsigned long long pos, end; unsigned seg; };
+ALIGN(struct e, 8); SIZE(struct e, 24);
+struct f { unsigned long long pos, end; unsigned seg; } __attribute__((aligned(8)));
+ALIGN(struct f, 8); SIZE(struct f, 24);
+union __attribute__((aligned(16))) x2 { int i; };
+ALIGN(union x2, 16); SIZE(union x2, 16);
+`
+	for _, tc := range []struct{ arch, v string }{
+		{"386", "#define V(i386, x86_64) i386\n"},
+		{"amd64", "#define V(i386, x86_64) x86_64\n"},
+	} {
+		arch := tc.arch
+		cfg, err := NewConfig("linux", arch, LongDouble64Flag("linux", arch))
+		if err != nil {
+			t.Fatalf("%s: NewConfig: %v", arch, err)
+		}
+
+		if _, err := Translate(cfg, []Source{
+			{Name: "<predefined>", Value: cfg.Predefined},
+			{Name: "<builtin>", Value: Builtin},
+			{Name: "test.c", Value: tc.v + src},
+		}); err != nil {
+			t.Errorf("linux/%s: %v", arch, err)
+		}
+	}
+}

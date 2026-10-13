@@ -285,6 +285,37 @@ func mergeAttr(t Type, a *Attributes) (r Type, err error) {
 	return t.setAttr(new), nil
 }
 
+// atomicType returns t as the type of an _Atomic object. gcc and clang align an
+// _Atomic type of 1, 2, 4 or 8 bytes to its size so that it can be accessed
+// atomically: on 386, where long long and double are 4-aligned, _Atomic long
+// long and _Atomic double are 8-aligned, also as struct members. gcc aligns a
+// 16 byte _Atomic type to 16 as well, but clang on 32-bit targets does not, so
+// those are left alone, as is a type with an aligned attribute.
+func atomicType(t Type) Type {
+	switch t.Kind() {
+	case Array, Function, Void:
+		return t
+	}
+
+	switch sz := t.Size(); sz {
+	case 1, 2, 4, 8:
+		if int64(t.Align()) >= sz {
+			return t
+		}
+
+		if a := t.Attributes(); a != nil && a.Aligned() > 0 {
+			return t
+		}
+
+		a := newAttributes()
+		a.setAligned(sz)
+		if r, err := mergeAttr(t, a); err == nil {
+			return r
+		}
+	}
+	return t
+}
+
 type noBitField struct{}
 
 // BitField implements Type.
@@ -987,6 +1018,9 @@ type Field struct {
 	typ                   typer
 	valueBits             int64
 
+	// Alignment requested by _Alignas or __attribute__((aligned(N))) on the
+	// member, zero if none. It never lowers the alignment of the type.
+	align     int
 	depth     int
 	groupSize int
 	// Additional bit offset to offset bytes. Non zero only for bit fields but can
@@ -1116,6 +1150,10 @@ func (n *Field) Name() string {
 
 // Offset reports the offset of n in bytes.
 func (n *Field) Offset() int64 { return n.offsetBytes }
+
+// alignment reports the alignment n is allocated at: the alignment of its type,
+// or more if _Alignas or an aligned attribute on the member asks for it.
+func (n *Field) alignment() int { return max(n.Type().Align(), n.align) }
 
 // OuterGroupOffset reports the non-overlapping group offset of n in bytes. If
 // n is not a bit field the value is the same as Offset(). If n is a bit field

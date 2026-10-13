@@ -2560,6 +2560,9 @@ func (n *DeclarationSpecifiers) check(c *ctx, isExtern, isStatic, isAtomic, isTh
 				c.errors.add(errorf("%v", err))
 			}
 		}
+		if *isAtomic && r != Invalid {
+			r = atomicType(r)
+		}
 		n.typ = r
 	}(n)
 
@@ -2578,7 +2581,7 @@ func (n *DeclarationSpecifiers) check(c *ctx, isExtern, isStatic, isAtomic, isTh
 		case DeclarationSpecifiersFunc: // FunctionSpecifier DeclarationSpecifiers
 			n.FunctionSpecifier.check(c, isInline, isNoreturn)
 		case DeclarationSpecifiersAlignSpec: // AlignmentSpecifier DeclarationSpecifiers
-			if v := n.AlignmentSpecifier.check(c).Align(); v > 0 {
+			if v := n.AlignmentSpecifier.align(c); v > 0 {
 				*alignas = v
 			}
 		case DeclarationSpecifiersAttr:
@@ -2833,6 +2836,31 @@ func (n *AlignmentSpecifier) check(c *ctx) (r Type) {
 		c.errors.add(errorf("internal error: %v", n.Case))
 		return nil
 	}
+}
+
+// align returns the alignment n specifies: the alignment of the type in
+// _Alignas(type) or the value of the expression in _Alignas(expr), not the
+// alignment of its type. Zero specifies no alignment.
+func (n *AlignmentSpecifier) align(c *ctx) int {
+	t := n.check(c)
+	switch n.Case {
+	case AlignmentSpecifierType: // "_Alignas" '(' TypeName ')'
+		if t != nil {
+			return t.Align()
+		}
+	case AlignmentSpecifierExpr: // "_Alignas" '(' ConstantExpression ')'
+		switch x := n.ConstantExpression.Value().(type) {
+		case Int64Value:
+			if x > 0 {
+				return int(x)
+			}
+		case UInt64Value:
+			if x > 0 && x <= math.MaxInt32 {
+				return int(x)
+			}
+		}
+	}
+	return 0
 }
 
 // FunctionSpecifier:
@@ -3282,9 +3310,9 @@ func (n *StructDeclarationList) check(c *ctx, s *StructOrUnionSpecifier, isVolat
 		}
 
 		n.checkStruct(c, a, fields)
-		x.align = a.align
+		x.align = definitionAlign(a.align, x.attrs)
 		x.fields = fields
-		x.size = roundup(a.brkBytes, int64(a.align))
+		x.size = roundup(a.brkBytes, int64(x.align))
 		x.padding = int(x.size - a.brkBytes)
 	case *UnionType:
 		if len(fields) == 0 {
@@ -3294,9 +3322,9 @@ func (n *StructDeclarationList) check(c *ctx, s *StructOrUnionSpecifier, isVolat
 		}
 
 		n.checkUnion(c, a, fields)
-		x.align = a.align
+		x.align = definitionAlign(a.align, x.attrs)
 		x.fields = fields
-		x.size = roundup(a.brkBytes, int64(a.align))
+		x.size = roundup(a.brkBytes, int64(x.align))
 		x.padding = int(x.size - a.brkBytes)
 	default:
 		c.errors.add(errorf("%v: internal error", n.Position()))
@@ -3311,6 +3339,17 @@ func (n *StructDeclarationList) check(c *ctx, s *StructOrUnionSpecifier, isVolat
 	// 	)
 	// }
 	// trc("----")
+}
+
+// definitionAlign returns the alignment of a struct or union whose members
+// need align and whose definition has the attributes attr: an aligned attribute
+// there raises the alignment, and so the size, but does not lower it.
+func definitionAlign(align int, attr *Attributes) int {
+	if attr != nil && attr.Aligned() > int64(align) {
+		return int(attr.Aligned())
+	}
+
+	return align
 }
 
 func (n *StructDeclarationList) checkUnion(c *ctx, a *fieldAllocator, s []*Field) {
@@ -3414,7 +3453,7 @@ func (a *fieldAllocator) close() {
 			continue
 		}
 
-		a.align = mathutil.Max(a.align, f.Type().Align())
+		a.align = mathutil.Max(a.align, f.alignment())
 	}
 }
 
@@ -3537,7 +3576,7 @@ func (a *fieldAllocator) field(f *Field) {
 	if f.isFlexibleArrayMember || isEmpty(t) {
 		sz = 0
 	}
-	a.brkBytes = roundup(a.brkBytes, int64(t.Align()))
+	a.brkBytes = roundup(a.brkBytes, int64(f.alignment()))
 	f.accessBytes = sz
 	f.groupSize = int(sz)
 	f.offsetBytes = a.brkBytes
@@ -3592,9 +3631,23 @@ func (n *StructDeclaration) check(c *ctx, isVolatile0, isConst0 bool) (r []*Fiel
 			default:
 				trc("%v: %T %s", n.Position(), x, x)
 			}
+			f.align = alignas
 			return []*Field{f}
 		default:
-			return n.StructDeclaratorList.check(c, t, isAtomic, isConst, isVolatile, isRestrict)
+			r = n.StructDeclaratorList.check(c, t, isAtomic, isConst, isVolatile, isRestrict)
+			// _Alignas applies to every declarator of the declaration, an
+			// aligned attribute after the last declarator only to that one.
+			for _, f := range r {
+				if f != nil && !f.IsBitfield() {
+					f.align = alignas
+				}
+			}
+			if attr := n.AttributeSpecifierList.check(c); attr != nil && attr.Aligned() > 0 && len(r) != 0 {
+				if f := r[len(r)-1]; f != nil && !f.IsBitfield() {
+					f.align = mathutil.Max(f.align, int(attr.Aligned()))
+				}
+			}
+			return r
 		}
 	case StructDeclarationAssert: // StaticAssertDeclaration
 		n.StaticAssertDeclaration.check(c)
@@ -3625,6 +3678,9 @@ func (n *SpecifierQualifierList) check(c *ctx, isAtomic, isConst, isVolatile, is
 				c.errors.add(errorf("%v", err))
 			}
 		}
+		if *isAtomic {
+			r = atomicType(r)
+		}
 	}()
 
 	var attrs []*Attributes
@@ -3638,7 +3694,7 @@ func (n *SpecifierQualifierList) check(c *ctx, isAtomic, isConst, isVolatile, is
 				attrs = append(attrs, attr)
 			}
 		case SpecifierQualifierListAlignSpec: // AlignmentSpecifier SpecifierQualifierList
-			if v := n.AlignmentSpecifier.check(c).Align(); v > 0 {
+			if v := n.AlignmentSpecifier.align(c); v > 0 {
 				*alignas = v
 			}
 		default:

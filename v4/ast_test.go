@@ -4688,7 +4688,7 @@ func ExampleStructOrUnionSpecifier_def() {
 	fmt.Println(exampleAST(141, "struct s { int i; } __attribute__((a));"))
 	// Output:
 	// &cc.StructOrUnionSpecifier{
-	// · AttributeSpecifierList: &cc.AttributeSpecifierList{
+	// · AttributeSpecifierList2: &cc.AttributeSpecifierList{
 	// · · AttributeSpecifier: &cc.AttributeSpecifier{
 	// · · · AttributeValueList: &cc.AttributeValueList{
 	// · · · · AttributeValue: &cc.AttributeValue{
