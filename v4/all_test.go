@@ -4717,6 +4717,20 @@ struct f { unsigned long long pos, end; unsigned seg; } __attribute__((aligned(8
 ALIGN(struct f, 8); SIZE(struct f, 24);
 union __attribute__((aligned(16))) x2 { int i; };
 ALIGN(union x2, 16); SIZE(union x2, 16);
+
+// The aligned attribute of a definition aligns that type only, not a pointer
+// another declarator of the declaration derives from it. mingw's winnt.h has
+// typedef struct DECLSPEC_ALIGN(16) _CONTEXT { ... } CONTEXT, *PCONTEXT.
+typedef struct __attribute__((aligned(16))) s1 { int a; } T1, *P1;
+typedef struct s2 { int a; } __attribute__((aligned(16))) T2, *P2;
+typedef struct __attribute__((aligned(16))) { int a; } T3, *P3;
+union __attribute__((aligned(16))) u4 { int a; } v4, *p4;
+struct e1 { P1 p; P2 q; P3 r; };
+ALIGN(T1, 16); SIZE(T1, 16); ALIGN(P1, V(4, 8));
+ALIGN(T2, 16); ALIGN(P2, V(4, 8));
+ALIGN(T3, 16); ALIGN(P3, V(4, 8));
+ALIGN(union u4, 16); SIZE(union u4, 16); _Static_assert(_Alignof(p4) == V(4, 8), "_Alignof(p4)");
+ALIGN(struct e1, V(4, 8)); SIZE(struct e1, V(12, 24));
 `
 	for _, tc := range []struct{ arch, v string }{
 		{"386", "#define V(i386, x86_64) i386\n"},

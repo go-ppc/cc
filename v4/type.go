@@ -1174,6 +1174,7 @@ type structType struct {
 	tag    Token
 
 	align         int
+	defAlign      int // From an aligned attribute of the definition, see StructOrUnionSpecifier.check.
 	padding       int
 	isComplete    bool // Memoized isIncompleteInner() == false, see (*StructType).isIncompleteInner.
 	isIncomplete0 bool
@@ -2713,6 +2714,35 @@ func (n *Attributes) setVectorSize(v int64)           { n.vectorSize = v; n.isNo
 func (n *Attributes) setVisibility(s string)          { n.visibility = s; n.isNonZero = true }
 func (n *Attributes) setVisibilityDecl(d *Declarator) { n.visibilityDecl = d; n.isNonZero = true }
 func (n *Attributes) setWeak()                        { n.weak = true; n.isNonZero = true }
+
+// withoutAligned returns n without its aligned attribute, or nil when nothing
+// else is left.
+func (n *Attributes) withoutAligned() *Attributes {
+	if n == nil || n.aligned <= 0 {
+		return n
+	}
+
+	m := *n
+	m.aligned = -1
+	m.customAttributes = nil
+	for k, v := range n.customAttributes {
+		switch k {
+		case "aligned", "__aligned__":
+			// Dropped with n.aligned.
+		default:
+			if m.customAttributes == nil {
+				m.customAttributes = map[string][]Value{}
+			}
+			m.customAttributes[k] = v
+		}
+	}
+	if m.alias == "" && m.aliasDecl == nil && m.vectorSize <= 0 && m.visibility == "" && m.visibilityDecl == nil &&
+		len(m.customAttributes) == 0 && !m.alwaysInline && !m.gnuInline && !m.isConst && !m.isVolatile && !m.weak {
+		return nil
+	}
+
+	return &m
+}
 
 func (n *Attributes) setCustom(attr string, v []Value) {
 	if n.customAttributes == nil {

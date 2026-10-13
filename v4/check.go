@@ -3227,11 +3227,27 @@ func (n *StructOrUnionSpecifier) check(c *ctx, isVolatile, isConst bool) (r Type
 			}
 		}()
 
+		// An aligned attribute of the definition belongs to the layout of the
+		// type, see StructDeclarationList.check. Left in its attributes,
+		// Declaration.check would give it to the other declarators too, and in
+		//
+		//	typedef struct __attribute__((aligned(16))) s { ... } T, *P;
+		//
+		// P would be a 16-aligned pointer.
+		var defAlign int
+		if attr != nil {
+			defAlign = int(attr.Aligned())
+			attr = attr.withoutAligned()
+		}
 		switch {
 		case n.StructOrUnion.Case == StructOrUnionUnion:
-			n.typ = c.newUnionType(n.LexicalScope(), tag, nil, -1, 1, attr)
+			t := c.newUnionType(n.LexicalScope(), tag, nil, -1, 1, attr)
+			t.defAlign = defAlign
+			n.typ = t
 		default:
-			n.typ = c.newStructType(n.LexicalScope(), tag, nil, -1, 1, attr)
+			t := c.newStructType(n.LexicalScope(), tag, nil, -1, 1, attr)
+			t.defAlign = defAlign
+			n.typ = t
 		}
 
 		n.StructDeclarationList.check(c, n, isVolatile, isConst)
@@ -3310,7 +3326,7 @@ func (n *StructDeclarationList) check(c *ctx, s *StructOrUnionSpecifier, isVolat
 		}
 
 		n.checkStruct(c, a, fields)
-		x.align = definitionAlign(a.align, x.attrs)
+		x.align = mathutil.Max(a.align, x.defAlign)
 		x.fields = fields
 		x.size = roundup(a.brkBytes, int64(x.align))
 		x.padding = int(x.size - a.brkBytes)
@@ -3322,7 +3338,7 @@ func (n *StructDeclarationList) check(c *ctx, s *StructOrUnionSpecifier, isVolat
 		}
 
 		n.checkUnion(c, a, fields)
-		x.align = definitionAlign(a.align, x.attrs)
+		x.align = mathutil.Max(a.align, x.defAlign)
 		x.fields = fields
 		x.size = roundup(a.brkBytes, int64(x.align))
 		x.padding = int(x.size - a.brkBytes)
@@ -3339,17 +3355,6 @@ func (n *StructDeclarationList) check(c *ctx, s *StructOrUnionSpecifier, isVolat
 	// 	)
 	// }
 	// trc("----")
-}
-
-// definitionAlign returns the alignment of a struct or union whose members
-// need align and whose definition has the attributes attr: an aligned attribute
-// there raises the alignment, and so the size, but does not lower it.
-func definitionAlign(align int, attr *Attributes) int {
-	if attr != nil && attr.Aligned() > int64(align) {
-		return int(attr.Aligned())
-	}
-
-	return align
 }
 
 func (n *StructDeclarationList) checkUnion(c *ctx, a *fieldAllocator, s []*Field) {
