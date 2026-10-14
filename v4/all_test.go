@@ -2287,6 +2287,36 @@ func TestABI(t *testing.T) {
 	}
 }
 
+// TestABIComplex checks every ABI table against [0]6.2.5/13: Each complex type
+// has the same representation and alignment requirements as an array type
+// containing exactly two elements of the corresponding real type.
+func TestABIComplex(t *testing.T) {
+	for osarch := range abiTypes {
+		abi, err := NewABI(osarch[0], osarch[1])
+		if err != nil {
+			t.Errorf("%v: %v", osarch, err)
+			continue
+		}
+
+		for ck, rk := range map[Kind]Kind{
+			ComplexFloat16:    Float16,
+			ComplexFloat:      Float,
+			ComplexDouble:     Double,
+			ComplexLongDouble: LongDouble,
+		} {
+			c, ok := abi.Types[ck]
+			if !ok {
+				continue
+			}
+
+			r := abi.Types[rk]
+			if e := (AbiType{2 * r.Size, r.Align, r.FieldAlign}); c != e {
+				t.Errorf("%s/%s: %v %+v, want %+v", osarch[0], osarch[1], ck, c, e)
+			}
+		}
+	}
+}
+
 // TestBitfieldByteOrder pins the storage layout of bit fields, which is
 // endianness dependent: little-endian ABIs allocate a storage unit's bit fields
 // starting from the least significant bit, big-endian ABIs from the most
@@ -4269,7 +4299,9 @@ func TestIssue171(t *testing.T) {
 
 	// __fp16 is accepted as a spelling of _Float16 and __builtin_bit_cast is
 	// available, here checked with the windows/amd64 ABI, which knows the half
-	// precision types.
+	// precision types. Their sizes and alignments are those reported by
+	// x86_64-w64-mingw32-gcc and llvm-mingw clang; _Complex _Float16 is 2
+	// aligned, not 4.
 	cfg := defaultCfg()
 	abi, err := NewABI("windows", "amd64")
 	if err != nil {
@@ -4300,14 +4332,15 @@ int f(float x, v4sf v) {
 	}
 
 	for _, tc := range []struct {
-		nm   string
-		kind Kind
-		size int64
+		nm    string
+		kind  Kind
+		size  int64
+		align int
 	}{
-		{"h", Float16, 2},
-		{"g", Float16, 2},
-		{"c", ComplexFloat16, 4},
-		{"b", BFloat16, 2},
+		{"h", Float16, 2, 2},
+		{"g", Float16, 2, 2},
+		{"c", ComplexFloat16, 4, 2},
+		{"b", BFloat16, 2, 2},
 	} {
 		typ := ast.Scope.Nodes[tc.nm][0].(*Declarator).Type()
 		if g, e := typ.Kind(), tc.kind; g != e {
@@ -4315,6 +4348,12 @@ int f(float x, v4sf v) {
 		}
 		if g, e := typ.Size(), tc.size; g != e {
 			t.Errorf("%s: size %v, want %v", tc.nm, g, e)
+		}
+		if g, e := typ.Align(), tc.align; g != e {
+			t.Errorf("%s: align %v, want %v", tc.nm, g, e)
+		}
+		if g, e := typ.FieldAlign(), tc.align; g != e {
+			t.Errorf("%s: field align %v, want %v", tc.nm, g, e)
 		}
 	}
 	var types []string
