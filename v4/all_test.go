@@ -1879,7 +1879,7 @@ func TestMake(t *testing.T) {
 	switch goos {
 	case "darwin":
 		cfg.cflags = "-I/opt/homebrew/include"
-	case "freebsd", "openbsd;":
+	case "freebsd", "openbsd":
 		cfg.cflags = "-I/usr/local/include"
 	case "netbsd":
 		cfg.cflags = "-I/usr/pkg/include"

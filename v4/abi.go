@@ -488,6 +488,10 @@ var (
 			ULongLong:  {8, 8, 8},
 			UShort:     {2, 2, 2},
 			Void:       {1, 1, 1},
+			// OpenBSD clang version 19.1.7, used by its <immintrin.h>
+			Float16:        {2, 2, 2},
+			BFloat16:       {2, 2, 2},
+			ComplexFloat16: {4, 2, 2},
 		},
 		// OpenBSD clang version 13.0.0
 		{"openbsd", "arm64"}: {
