@@ -3277,6 +3277,7 @@ func (n *StructDeclarationList) check(c *ctx, s *StructOrUnionSpecifier, isVolat
 			break
 		}
 
+		a.darwinPPC = c.ast.ABI.goos == "darwin" && c.ast.ABI.goarch == "ppc"
 		n.checkStruct(c, a, fields)
 		x.align = a.align
 		x.fields = fields
@@ -3341,6 +3342,7 @@ func (n *StructDeclarationList) checkUnion(c *ctx, a *fieldAllocator, s []*Field
 }
 
 type fieldAllocator struct {
+	darwinPPC bool
 	align     int
 	bits      int64
 	brkBytes  int64
@@ -3410,7 +3412,7 @@ func (a *fieldAllocator) close() {
 			continue
 		}
 
-		a.align = mathutil.Max(a.align, f.Type().Align())
+		a.align = mathutil.Max(a.align, a.fieldAlign(f))
 	}
 }
 
@@ -3526,6 +3528,15 @@ func (a *fieldAllocator) newGroup(f *Field) {
 	f.mask = a.mask(int(valueBits))
 }
 
+// Apple ppc32 preserves the first member's natural alignment, but later
+// members use the alignment their type imposes when embedded.
+func (a *fieldAllocator) fieldAlign(f *Field) int {
+	if a.darwinPPC && f.index != 0 {
+		return f.Type().FieldAlign()
+	}
+	return f.Type().Align()
+}
+
 func (a *fieldAllocator) field(f *Field) {
 	a.closeGroup()
 	t := f.Type()
@@ -3533,7 +3544,7 @@ func (a *fieldAllocator) field(f *Field) {
 	if f.isFlexibleArrayMember || isEmpty(t) {
 		sz = 0
 	}
-	a.brkBytes = roundup(a.brkBytes, int64(t.Align()))
+	a.brkBytes = roundup(a.brkBytes, int64(a.fieldAlign(f)))
 	f.accessBytes = sz
 	f.groupSize = int(sz)
 	f.offsetBytes = a.brkBytes

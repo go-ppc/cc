@@ -1491,6 +1491,15 @@ func (n *StructType) FieldAlign() int {
 		return n.forward.Type().FieldAlign()
 	}
 
+	// This is the alignment imposed when embedded, not the standalone
+	// alignment inherited from the first member. Long double keeps 16.
+	if n.c != nil && n.c.ast.ABI.goos == "darwin" && n.c.ast.ABI.goarch == "ppc" {
+		if align := n.Align(); align > 4 && align < 16 {
+			return 4
+		}
+		return n.Align()
+	}
+
 	return n.align
 }
 

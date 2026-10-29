@@ -657,6 +657,8 @@ func LongDouble64Flag(os, arch string) string {
 		// 647:			LongDouble: {16, 16, 16},	{"linux", "loong64"}	gcc: error: unrecognized command-line option ‘-mlong-double-64’
 
 		//TODO linux/riscv64 builder is currently MIA
+		"darwin/ppc",
+		"darwin/ppc64",
 		"darwin/amd64",  // Apple clang version 12.0.0 (clang-1200.0.32.29) ok (fake gcc)
 		"freebsd/386",   // gcc (FreeBSD Ports Collection) 12.2.0 ok
 		"freebsd/amd64", // gcc (FreeBSD Ports Collection) 12.2.0 ok
