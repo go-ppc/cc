@@ -837,7 +837,16 @@ func (c *cpp) parseHasFeature(ts tokenSequence, kind string) (r tokenSequence) {
 	case "__has_extension", "__has_feature":
 		switch nm {
 		case "c_atomic", "c_generic_selections", "c_thread_local", "c_alignas":
-			supported = true
+			// Correction to a hardcoded capability claim, found while
+			// generating a third-party target (modernc.org/sqlite at
+			// darwin/ppc): the TU's own macro surface is the capability
+			// record of record for C11 atomics. A compiler that has them
+			// defines __ATOMIC_RELAXED in its -dM output (every upstream
+			// target's CC does); a compiler without them, e.g. Leopard's
+			// gcc 4.0.1, must answer 0 as the amalgamation's own compat
+			// define would. Only programs that would otherwise have
+			// failed typechecking on __ATOMIC_RELAXED see a difference.
+			supported = nm != "c_atomic" || c.macro(t.Token, "__ATOMIC_RELAXED") != nil
 		}
 	case "__has_builtin":
 		// Match Clang's C11 atomic builtins, plus common GCC fallbacks
