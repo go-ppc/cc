@@ -22,6 +22,7 @@ var (
 		{"freebsd", "arm64"}: false,
 		{"linux", "arm"}:     false,
 		{"linux", "arm64"}:   false,
+		{"linux", "ppc"}:     false, // __CHAR_UNSIGNED__ 1; (char)-1 == 255 on Adelie gcc 13.3.0
 		{"linux", "ppc64le"}: false,
 		{"linux", "riscv64"}: false,
 		{"linux", "s390x"}:   false,
@@ -804,6 +805,44 @@ var abiTypes = map[[2]string]map[Kind]ABIType{
 		Float64:    {8, 8, 8},
 		Float64x:   {16, 16, 16},
 		Float128:   {16, 16, 16},
+	},
+	// Linux/PowerPC 32-bit (SysV, big-endian, musl): ./cmd/cabi/main.c executed in
+	// the Adelie 1.0-beta6 ppc rootfs by Adelie gcc 13.3.0 (powerpc-foxkit-linux-musl),
+	// with the _Float64x/_Float128/_Decimal* lines guarded out because this target
+	// rejects those types. Output: runs/libc-linuxppc-20261029/capture/cabi.out in
+	// the port workspace. long double is natively 64-bit here (musl powerpc), and
+	// unlike darwin/ppc, double and long long are 8-aligned inside structs too.
+	{"linux", "ppc"}: {
+		Void:       {1, 1, 1},
+		Bool:       {1, 1, 1},
+		Char:       {1, 1, 1},
+		SChar:      {1, 1, 1},
+		UChar:      {1, 1, 1},
+		Short:      {2, 2, 2},
+		UShort:     {2, 2, 2},
+		Enum:       {4, 4, 4},
+		Int:        {4, 4, 4},
+		UInt:       {4, 4, 4},
+		Long:       {4, 4, 4},
+		ULong:      {4, 4, 4},
+		LongLong:   {8, 8, 8},
+		ULongLong:  {8, 8, 8},
+		Ptr:        {4, 4, 4},
+		Function:   {4, 4, 4},
+		Float:      {4, 4, 4},
+		Double:     {8, 8, 8},
+		LongDouble: {8, 8, 8},
+		Int8:       {1, 1, 1},
+		UInt8:      {1, 1, 1},
+		Int16:      {2, 2, 2},
+		UInt16:     {2, 2, 2},
+		Int32:      {4, 4, 4},
+		UInt32:     {4, 4, 4},
+		Int64:      {8, 8, 8},
+		UInt64:     {8, 8, 8},
+		Float32:    {4, 4, 4},
+		Float32x:   {8, 8, 8},
+		Float64:    {8, 8, 8},
 	},
 	// gcc (Debian 10.2.1-6) 10.2.1 20210110
 	{"linux", "ppc64le"}: {
