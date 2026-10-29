@@ -167,6 +167,46 @@ typedef struct { ld x; char c; } f_ld;
 	if err != nil {
 		t.Fatal(err)
 	}
+	testLinuxPPCLayout(t, ast)
+}
+
+// musl's time64 timespec on a big-endian 32-bit target puts a 32-bit unnamed
+// bitfield before tv_nsec: its widths, 8*(sizeof(time_t)-sizeof(long)) times
+// the byte-order test, evaluate to 32 and 0 here. gcc: size 16, tv_nsec at 12
+// (bitfields.out). ccgo translates with NoFieldAndBitfieldOverlap, so check
+// that configuration too.
+func TestLinuxPPCTimespecBitfield(t *testing.T) {
+	abi, err := NewABI("linux", "ppc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const src = `
+typedef long long time_t;
+struct timespec { time_t tv_sec; int :32; long tv_nsec; int :0; };
+struct stamp { struct timespec a, b; int tail; };
+`
+	for _, noOverlap := range []bool{false, true} {
+		cfg := &Config{ABI: abi}
+		cfg.NoFieldAndBitfieldOverlap = noOverlap
+		ast, err := Translate(cfg, nil, nil, []Source{{Name: "timespec.c", Value: src}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ts := ast.StructTypes[String("timespec")]
+		nsec, _ := ts.FieldByName(String("tv_nsec"))
+		if ts.Size() != 16 || ts.Align() != 8 || nsec.Offset() != 12 {
+			t.Errorf("noOverlap=%v timespec: size/align/tv_nsec = %d/%d/%d, want 16/8/12", noOverlap, ts.Size(), ts.Align(), nsec.Offset())
+		}
+		st := ast.StructTypes[String("stamp")]
+		b, _ := st.FieldByName(String("b"))
+		tail, _ := st.FieldByName(String("tail"))
+		if st.Size() != 40 || b.Offset() != 16 || tail.Offset() != 32 {
+			t.Errorf("noOverlap=%v stamp: size/b/tail = %d/%d/%d, want 40/16/32", noOverlap, st.Size(), b.Offset(), tail.Offset())
+		}
+	}
+}
+
+func testLinuxPPCLayout(t *testing.T, ast *AST) {
 	get := func(name string) Type {
 		for n := ast.TranslationUnit; n != nil; n = n.TranslationUnit {
 			d := n.ExternalDeclaration.Declaration

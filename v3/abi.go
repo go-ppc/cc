@@ -407,9 +407,22 @@ func (a *ABI) layout(ctx *context, n Node, t *structType) *structType {
 				group += f.bitFieldWidth
 			default:
 				if n := group % 64; n != 0 {
-					if ctx.cfg.FixBitfieldPadding {
+					switch {
+					case a.os == "linux" && a.arch == "ppc" && lf != nil && lf.isBitField && int(group) == 8*int(lf.Type().Size()):
+						// A bitfield group that exactly fills its storage unit
+						// needs no padding: off is already at the unit's end.
+						// The formulas below add at least one byte here, which
+						// moves musl's big-endian time64 timespec
+						// { time_t tv_sec; int :32; long tv_nsec; int :0; }
+						// from gcc's 16 bytes (tv_nsec at 12) to 24 (at 16).
+						// The other targets hit the same formula, but this fork
+						// regenerates only linux/ppc with it, so they keep their
+						// byte-stable output. Measured layouts:
+						// runs/libc-linuxppc-20261029/capture/bitfields.out in
+						// the port workspace.
+					case ctx.cfg.FixBitfieldPadding:
 						off += int64(normalizeBitFieldWidth(group-n) - group)
-					} else {
+					default:
 						group -= n
 						off += int64(normalizeBitFieldWidth(group) - group)
 					}
