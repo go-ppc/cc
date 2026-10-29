@@ -63,6 +63,15 @@ func NewABI(os, arch string) (ABI, error) {
 	return abi, nil
 }
 
+// LongDouble64Flag returns the C compiler flag that switches long double to 64
+// bits, if any.
+func LongDouble64Flag(os, arch string) string {
+	if os == "darwin" && (arch == "ppc" || arch == "ppc64") {
+		return "-mlong-double-64"
+	}
+	return ""
+}
+
 // NewABIFromEnv uses GOOS and GOARCH values to create a corresponding ABI.
 // If those environment variables are not set, an OS/arch of a Go runtime is used.
 // It returns a *ErrUnsupportedOSArch if OS/arch pair is not supported.
@@ -355,6 +364,9 @@ func (a *ABI) layout(ctx *context, n Node, t *structType) *structType {
 
 			bitSize := 8 * int(sz)
 			al := ft.FieldAlign()
+			if a.os == "darwin" && a.arch == "ppc" && i == 0 {
+				al = ft.Align()
+			}
 			if al == 0 {
 				al = 1
 			}
@@ -414,6 +426,12 @@ func (a *ABI) layout(ctx *context, n Node, t *structType) *structType {
 		}
 		t.align = byte(align)
 		t.fieldAlign = byte(align)
+		// Apple ppc32 structs impose only four-byte alignment when embedded,
+		// except for the 16-byte long-double alignment. The first member above
+		// retains its natural alignment for the struct itself.
+		if a.os == "darwin" && a.arch == "ppc" && align > 4 && align < 16 {
+			t.fieldAlign = 4
+		}
 		off0 := off
 		off = roundup(off, 8*int64(align))
 		if f != nil && !f.IsBitField() {
@@ -524,6 +542,9 @@ func (a *ABI) gccLayout(ctx *context, n Node, t *structType) (r *structType) {
 			}
 		default:
 			al := f.Type().Align()
+			if a.os == "darwin" && a.arch == "ppc" && i != 0 {
+				al = f.Type().FieldAlign()
+			}
 			if al > align {
 				align = al
 			}
@@ -543,6 +564,9 @@ func (a *ABI) gccLayout(ctx *context, n Node, t *structType) (r *structType) {
 	}
 	t.align = byte(align)
 	t.fieldAlign = byte(align)
+	if a.os == "darwin" && a.arch == "ppc" && align > 4 && align < 16 {
+		t.fieldAlign = 4
+	}
 	off0 := off
 	off = roundup128(off, 8*uint64(align))
 	if lf != nil && !lf.IsBitField() {
